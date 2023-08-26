@@ -1,15 +1,23 @@
 use egg;
 
 pub mod ir {
-    use std::collections::{HashMap, HashSet};
+    use std::{
+        collections::{HashMap, HashSet},
+        hash::Hash,
+    };
 
     use egg::{define_language, Analysis, Id};
 
     define_language! {
         pub enum Mio {
             "ite" = Ite([Id; 3]),
-            "table" = Table(Vec<Id>),
-            // "split" = Split(Vec<Id>),
+            "table" = Table([Id; 3]),
+            "keys" = Keys(Vec<Id>),
+            "actions" = Actions(Vec<Id>),
+            "mapsto" = MapsTo([Id; 2]),
+            "list" = List(Vec<Id>),
+            // putting tables in the same stage
+            "join" = Join(Vec<Id>),
             // Logical operators
             "land" = LAnd([Id; 2]),
             "lor" = LOr([Id; 2]),
@@ -88,27 +96,44 @@ pub mod ir {
 
         fn make(egraph: &egg::EGraph<Mio, Self>, enode: &Mio) -> Self::Data {
             match enode {
-                Mio::Table(params) => {
+                Mio::Join(tables) => {
+                    let reads = tables
+                        .iter()
+                        .map(|id| egraph[*id].data.max_read.clone())
+                        .reduce(|a, b| a.union(&b).cloned().collect())
+                        .unwrap_or_default();
+                    let writes = tables
+                        .iter()
+                        .map(|id| egraph[*id].data.max_write.clone())
+                        .reduce(|a, b| a.union(&b).cloned().collect())
+                        .unwrap_or_default();
+                    let local_reads = HashMap::from([(enode.clone(), reads.clone())]);
+                    let local_writes = HashMap::from([(enode.clone(), writes.clone())]);
+                    MioAnalysisData {
+                        max_read: reads,
+                        max_write: writes,
+                        local_reads,
+                        local_writes,
+                    }
+                }
+                Mio::List(params) => {
                     let mut reads = HashSet::new();
                     let mut writes = HashSet::new();
                     for param in params {
                         reads.extend(egraph[*param].data.max_read.clone());
                         writes.extend(egraph[*param].data.max_write.clone());
                     }
-                    let predicates = params[..params.len() / 2].to_vec();
-                    let branches = params[params.len() / 2..params.len() - 1].to_vec();
                     let local_reads = HashMap::from([(
                         enode.clone(),
-                        predicates
+                        params
                             .iter()
-                            .chain(branches.iter())
                             .map(|id| egraph[*id].data.max_read.clone())
                             .reduce(|a, b| a.union(&b).cloned().collect())
                             .unwrap_or_default(),
                     )]);
                     let local_writes = HashMap::from([(
                         enode.clone(),
-                        branches
+                        params
                             .iter()
                             .map(|id| egraph[*id].data.max_write.clone())
                             .reduce(|a, b| a.union(&b).cloned().collect())
@@ -119,6 +144,66 @@ pub mod ir {
                         max_write: writes,
                         local_reads,
                         local_writes,
+                    }
+                }
+                Mio::MapsTo([field, value]) => {
+                    let reads = egraph[*value].data.max_read.clone();
+                    let writes = HashSet::from([*field]);
+                    MioAnalysisData {
+                        local_reads: HashMap::from([(enode.clone(), reads.clone())]),
+                        local_writes: HashMap::from([(enode.clone(), writes.clone())]),
+                        max_read: reads,
+                        max_write: writes,
+                    }
+                }
+                Mio::Keys(keys) => {
+                    let reads = keys
+                        .iter()
+                        .map(|id| egraph[*id].data.max_read.clone())
+                        .reduce(|a, b| a.union(&b).cloned().collect())
+                        .unwrap_or_default();
+                    MioAnalysisData {
+                        max_read: reads.clone(),
+                        max_write: HashSet::new(),
+                        local_reads: HashMap::from([(enode.clone(), reads)]),
+                        local_writes: HashMap::from([(enode.clone(), HashSet::new())]),
+                    }
+                }
+                Mio::Actions(actions) => {
+                    let reads = actions
+                        .iter()
+                        .map(|id| egraph[*id].data.max_read.clone())
+                        .reduce(|a, b| a.union(&b).cloned().collect())
+                        .unwrap_or_default();
+                    let writes = actions
+                        .iter()
+                        .map(|id| egraph[*id].data.max_write.clone())
+                        .reduce(|a, b| a.union(&b).cloned().collect())
+                        .unwrap_or_default();
+                    MioAnalysisData {
+                        max_read: reads.clone(),
+                        max_write: writes.clone(),
+                        local_reads: HashMap::from([(enode.clone(), reads)]),
+                        local_writes: HashMap::from([(enode.clone(), writes)]),
+                    }
+                }
+                Mio::Table(params) => {
+                    // (table (keys ?p1 ?p2 ... ?pn)
+                    //        (actions
+                    //          (list
+                    //              (mapsto ?f1 ?v1)
+                    //              (mapsto ?f2 ?v2) ...)
+                    //          (list
+                    //              (mapsto ?f3 ?v3) ...) ...)
+                    //        ?parent)
+                    let mut reads = egraph[params[0]].data.max_read.clone();
+                    let mut writes = egraph[params[1]].data.max_write.clone();
+
+                    MioAnalysisData {
+                        max_read: reads.clone(),
+                        max_write: writes.clone(),
+                        local_reads: HashMap::from([(enode.clone(), reads)]),
+                        local_writes: HashMap::from([(enode.clone(), writes)]),
                     }
                 }
                 Mio::Ite([cond, ib, eb]) => {
@@ -200,32 +285,33 @@ pub mod utils {
     };
 
     #[derive(Debug, Clone, PartialEq)]
-    enum Dependency {
+    pub enum Dependency {
         WAW,
         WAR,
         RAW,
         UNKNOWN,
+        INDEPENDENT,
     }
 
-    fn get_dependency(
+    pub fn get_dependency(
         lhs_reads: &HashSet<Id>,
         lhs_writes: &HashSet<Id>,
         rhs_reads: &HashSet<Id>,
         rhs_writes: &HashSet<Id>,
     ) -> Dependency {
-        let mut result = Dependency::UNKNOWN;
+        let mut result = Dependency::INDEPENDENT;
         if lhs_writes.intersection(rhs_writes).count() > 0 {
             result = Dependency::WAW;
         }
         if lhs_reads.intersection(rhs_writes).count() > 0 {
-            if result != Dependency::UNKNOWN {
+            if result != Dependency::INDEPENDENT {
                 return Dependency::UNKNOWN;
             } else {
                 result = Dependency::WAR;
             }
         }
         if lhs_writes.intersection(rhs_reads).count() > 0 {
-            if result != Dependency::UNKNOWN {
+            if result != Dependency::INDEPENDENT {
                 return Dependency::UNKNOWN;
             } else {
                 result = Dependency::RAW;
@@ -244,7 +330,7 @@ pub mod utils {
         lhs_writes: &HashSet<Id>,
         rhs_reads: &HashSet<Id>,
         rhs_writes: &HashSet<Id>,
-    ) -> Option<Mio> {
+    ) -> Option<Id> {
         if let (Mio::Table(lhs_params), Mio::Table(rhs_params)) = (lhs, rhs) {
             match get_dependency(lhs_reads, lhs_writes, rhs_reads, rhs_writes) {
                 Dependency::UNKNOWN => None,
@@ -255,19 +341,28 @@ pub mod utils {
                         lhs_params[lhs_params.len() / 2..lhs_params.len() - 1].to_vec();
                     let branches_rhs =
                         rhs_params[rhs_params.len() / 2..rhs_params.len() - 1].to_vec();
-                    for i in 0..predicates_lhs.len() {
-                        for j in 0..predicates_rhs.len() {
-                            // merge entry i of lhs and entry j of rhs
-                            let predicate =
-                                egraph.add(Mio::LAnd([predicates_lhs[i], predicates_rhs[j]]));
+
+                    let mut new_predicates = Vec::new();
+                    let mut new_branches = Vec::new();
+                    for (lb, lp) in branches_lhs.iter().zip(predicates_lhs.iter()) {
+                        for (rb, rp) in branches_rhs.iter().zip(predicates_rhs.iter()) {
+                            let lb_data = &egraph[*lb].data;
+                            let rb_data = &egraph[*rb].data;
+                            if lb_data.max_write.intersection(&rb_data.max_write).count() == 0 {
+                                // Independent branches
+                                new_predicates.push(lp.clone());
+                                new_branches.push(lb.clone());
+                                new_predicates.push(rp.clone());
+                                new_branches.push(rb.clone());
+                            }
                         }
                     }
-                    Some(Mio::Table(vec![]))
+                    todo!()
                 }
                 _ => unimplemented!(),
             }
         } else {
-            None
+            panic!("merge_table called with non-table arguments");
         }
     }
 }
