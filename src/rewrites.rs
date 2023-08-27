@@ -60,3 +60,58 @@ pub fn join_properties() -> Vec<RW> {
         ),
     ]
 }
+
+mod test {
+    use std::path::PathBuf;
+
+    use egg::{AstDepth, EGraph, Extractor, RecExpr, Runner};
+
+    use crate::{
+        extractors::GreedyExtractor,
+        language::ir::{Mio, MioAnalysis},
+    };
+
+    #[test]
+    fn test_example() {
+        let prog = "(ite (land (= f8 1) (= f9 1))
+                            (table (keys (= m1 const1))
+                                   (actions (list
+                                                (mapsto f1
+                                                        (bitxor f2 1))
+                                                (mapsto f4 f3)))
+                                    id
+                            )
+                            (table  (keys (= m3 const3))
+                                    (actions
+                                            (list
+                                                (mapsto f6 (bitshl f7 2))))
+                                    (table (keys (= m2 const2))
+                                            (actions (list
+                                                        (mapsto f5 (+ f5 1))))
+                                            id
+                                    )
+                                )
+                            )
+                        )"
+        .parse::<RecExpr<Mio>>()
+        .unwrap();
+        let mut rewrites = super::join_properties();
+        rewrites.extend(
+            [
+                super::join_flatten(),
+                super::parallelize_independent_tables(),
+            ]
+            .into_iter(),
+        );
+        let mut egraph = EGraph::new(MioAnalysis {});
+        let rt = egraph.add_expr(&prog);
+        let runner = Runner::<Mio, MioAnalysis>::new(MioAnalysis {});
+        let runner = runner.with_egraph(egraph).run(&rewrites);
+        let egraph = runner.egraph;
+        egraph.dot().to_pdf(PathBuf::from("test.pdf")).unwrap();
+        let extractor = Extractor::new(&egraph, GreedyExtractor);
+        let (best_cost, best_expr) = extractor.find_best(rt);
+        println!("best cost: {}", best_cost);
+        println!("best expr: {}", best_expr.pretty(80));
+    }
+}

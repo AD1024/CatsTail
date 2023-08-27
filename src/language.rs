@@ -28,11 +28,20 @@ pub mod ir {
             "bitor" = BitOr([Id; 2]),
             "bitnot" = BitNot(Id),
             "bitxor" = BitXor([Id; 2]),
+            "bitshl" = BitShl([Id; 2]),
+            "bitshr" = BitShr([Id; 2]),
             // Arithmetic operators
-            "add" = Add([Id; 2]),
-            "sub" = Sub([Id; 2]),
+            "+" = Add([Id; 2]),
+            "-" = Sub([Id; 2]),
             "store" = Store([Id; 2]),
             "load" = Load(Id),
+            // Comparators
+            "=" = Eq([Id; 2]),
+            "<" = Lt([Id; 2]),
+            ">" = Gt([Id; 2]),
+            "<=" = Le([Id; 2]),
+            ">=" = Ge([Id; 2]),
+            "!=" = Neq([Id; 2]),
             Symbol(String),
             Number(i32),
         }
@@ -232,9 +241,17 @@ pub mod ir {
                 | Mio::BitAnd([a, b])
                 | Mio::BitOr([a, b])
                 | Mio::BitXor([a, b])
+                | Mio::BitShl([a, b])
+                | Mio::BitShr([a, b])
                 | Mio::LAnd([a, b])
                 | Mio::LOr([a, b])
-                | Mio::LXor([a, b]) => {
+                | Mio::LXor([a, b])
+                | Mio::Eq([a, b])
+                | Mio::Lt([a, b])
+                | Mio::Gt([a, b])
+                | Mio::Le([a, b])
+                | Mio::Ge([a, b])
+                | Mio::Neq([a, b]) => {
                     let mut reads = egraph[*a].data.max_read.clone();
                     reads.extend(egraph[*b].data.max_read.clone());
                     let mut writes = egraph[*a].data.max_write.clone();
