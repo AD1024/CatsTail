@@ -1,9 +1,12 @@
 use egg;
 
 pub mod ir {
+    use std::ops;
     use std::{
         collections::{HashMap, HashSet},
+        fmt::Display,
         hash::Hash,
+        str::FromStr,
     };
 
     use egg::{define_language, Analysis, Id};
@@ -42,12 +45,187 @@ pub mod ir {
             "<=" = Le([Id; 2]),
             ">=" = Ge([Id; 2]),
             "!=" = Neq([Id; 2]),
+            Constant(Constant),
             Symbol(String),
-            Number(i32),
         }
     }
 
-    pub struct MioAnalysis;
+    #[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Eq, Hash)]
+    pub enum Constant {
+        Int(i32),
+        Bool(bool),
+    }
+
+    impl Display for Constant {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Constant::Int(i) => write!(f, "{}", i),
+                Constant::Bool(b) => write!(f, "{}", b),
+            }
+        }
+    }
+
+    impl FromStr for Constant {
+        type Err = ();
+
+        fn from_str(s: &str) -> Result<Self, Self::Err> {
+            if let Ok(i) = s.parse::<i32>() {
+                Ok(Constant::Int(i))
+            } else if let Ok(b) = s.parse::<bool>() {
+                Ok(Constant::Bool(b))
+            } else {
+                Err(())
+            }
+        }
+    }
+
+    impl std::ops::Add<Constant> for Constant {
+        type Output = Constant;
+
+        fn add(self, rhs: Constant) -> Self::Output {
+            match (self, rhs) {
+                (Constant::Int(a), Constant::Int(b)) => Constant::Int(a + b),
+                _ => panic!("Addition of non-integers"),
+            }
+        }
+    }
+
+    impl std::ops::Sub<Constant> for Constant {
+        type Output = Constant;
+
+        fn sub(self, rhs: Constant) -> Self::Output {
+            match (self, rhs) {
+                (Constant::Int(a), Constant::Int(b)) => Constant::Int(a - b),
+                _ => panic!("Subtraction of non-integers"),
+            }
+        }
+    }
+
+    impl std::ops::BitAnd<Constant> for Constant {
+        type Output = Constant;
+
+        fn bitand(self, rhs: Constant) -> Self::Output {
+            match (self, rhs) {
+                (Constant::Int(a), Constant::Int(b)) => Constant::Int(a & b),
+                _ => panic!("Bitwise and of non-integers"),
+            }
+        }
+    }
+
+    impl std::ops::BitOr<Constant> for Constant {
+        type Output = Constant;
+
+        fn bitor(self, rhs: Constant) -> Self::Output {
+            match (self, rhs) {
+                (Constant::Int(a), Constant::Int(b)) => Constant::Int(a | b),
+                _ => panic!("Bitwise or of non-integers"),
+            }
+        }
+    }
+
+    impl std::ops::BitXor<Constant> for Constant {
+        type Output = Constant;
+
+        fn bitxor(self, rhs: Constant) -> Self::Output {
+            match (self, rhs) {
+                (Constant::Int(a), Constant::Int(b)) => Constant::Int(a ^ b),
+                _ => panic!("Bitwise xor of non-integers"),
+            }
+        }
+    }
+
+    impl std::ops::Shl<Constant> for Constant {
+        type Output = Constant;
+
+        fn shl(self, rhs: Constant) -> Self::Output {
+            match (self, rhs) {
+                (Constant::Int(a), Constant::Int(b)) => Constant::Int(a << b),
+                _ => panic!("Bitwise shift left of non-integers"),
+            }
+        }
+    }
+
+    impl std::ops::Shr<Constant> for Constant {
+        type Output = Constant;
+
+        fn shr(self, rhs: Constant) -> Self::Output {
+            match (self, rhs) {
+                (Constant::Int(a), Constant::Int(b)) => Constant::Int(a >> b),
+                _ => panic!("Bitwise shift right of non-integers"),
+            }
+        }
+    }
+
+    impl std::ops::Not for Constant {
+        type Output = Constant;
+
+        fn not(self) -> Self::Output {
+            match self {
+                Constant::Int(a) => Constant::Int(!a),
+                _ => panic!("Bitwise not of non-integers"),
+            }
+        }
+    }
+
+    impl Constant {
+        pub fn as_bool(&self) -> Option<bool> {
+            match self {
+                Constant::Bool(b) => Some(*b),
+                _ => None,
+            }
+        }
+
+        pub fn as_int(&self) -> Option<i32> {
+            match self {
+                Constant::Int(i) => Some(*i),
+                _ => None,
+            }
+        }
+    }
+
+    pub struct MioAnalysis {
+        context: HashMap<String, Constant>,
+    }
+
+    impl Default for MioAnalysis {
+        fn default() -> Self {
+            MioAnalysis {
+                context: HashMap::new(),
+            }
+        }
+    }
+
+    impl MioAnalysis {
+        pub fn new(ctx: HashMap<String, Constant>) -> Self {
+            MioAnalysis { context: ctx }
+        }
+
+        pub fn eval_binop(
+            expr: &Mio,
+            lhs: Option<Constant>,
+            rhs: Option<Constant>,
+        ) -> Option<Constant> {
+            Some(match expr {
+                Mio::Add(_) => lhs? + rhs?,
+                Mio::Sub(_) => lhs? - rhs?,
+                Mio::BitAnd(_) => lhs? & rhs?,
+                Mio::BitOr(_) => lhs? | rhs?,
+                Mio::BitXor(_) => lhs? ^ rhs?,
+                Mio::BitShl(_) => lhs? << rhs?,
+                Mio::BitShr(_) => lhs? >> rhs?,
+                Mio::LAnd(_) => Constant::Bool(lhs?.as_bool()? && rhs?.as_bool()?),
+                Mio::LOr(_) => Constant::Bool(lhs?.as_bool()? || rhs?.as_bool()?),
+                Mio::LXor(_) => Constant::Bool(lhs?.as_bool()? ^ rhs?.as_bool()?),
+                Mio::Eq(_) => Constant::Bool(lhs? == rhs?),
+                Mio::Lt(_) => Constant::Bool(lhs? < rhs?),
+                Mio::Gt(_) => Constant::Bool(lhs? > rhs?),
+                Mio::Le(_) => Constant::Bool(lhs? <= rhs?),
+                Mio::Ge(_) => Constant::Bool(lhs? >= rhs?),
+                Mio::Neq(_) => Constant::Bool(lhs? != rhs?),
+                _ => panic!("eval_binop called with non-binary operator"),
+            })
+        }
+    }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct MioAnalysisData {
@@ -55,6 +233,7 @@ pub mod ir {
         pub local_writes: HashMap<Mio, HashSet<Id>>,
         pub max_read: HashSet<Id>,
         pub max_write: HashSet<Id>,
+        pub constant: Option<Constant>,
     }
 
     impl Default for MioAnalysisData {
@@ -64,12 +243,22 @@ pub mod ir {
                 local_writes: HashMap::new(),
                 max_read: HashSet::new(),
                 max_write: HashSet::new(),
+                constant: None,
             }
         }
     }
 
     impl Analysis<Mio> for MioAnalysis {
         type Data = MioAnalysisData;
+
+        fn modify(egraph: &mut egg::EGraph<Mio, Self>, id: Id) {
+            // when there are constants, we can add a new node to the e-class
+            // with the constant value
+            if let Some(constant) = egraph[id].data.constant.clone() {
+                let new_id = egraph.add(Mio::Constant(constant));
+                egraph.union(id, new_id);
+            }
+        }
 
         fn merge(&mut self, a: &mut Self::Data, b: Self::Data) -> egg::DidMerge {
             let max_read = a.max_read.union(&b.max_read).cloned().collect();
@@ -99,6 +288,7 @@ pub mod ir {
                 max_write,
                 local_reads,
                 local_writes,
+                constant: a.constant.clone().or(b.constant.clone()),
             };
             return egg::DidMerge(new != *a, new != b);
         }
@@ -123,6 +313,7 @@ pub mod ir {
                         max_write: writes,
                         local_reads,
                         local_writes,
+                        constant: None,
                     }
                 }
                 Mio::List(params) => {
@@ -153,6 +344,7 @@ pub mod ir {
                         max_write: writes,
                         local_reads,
                         local_writes,
+                        constant: None,
                     }
                 }
                 Mio::MapsTo([field, value]) => {
@@ -163,6 +355,7 @@ pub mod ir {
                         local_writes: HashMap::from([(enode.clone(), writes.clone())]),
                         max_read: reads,
                         max_write: writes,
+                        constant: None,
                     }
                 }
                 Mio::Keys(keys) => {
@@ -176,6 +369,7 @@ pub mod ir {
                         max_write: HashSet::new(),
                         local_reads: HashMap::from([(enode.clone(), reads)]),
                         local_writes: HashMap::from([(enode.clone(), HashSet::new())]),
+                        constant: None,
                     }
                 }
                 Mio::Actions(actions) => {
@@ -194,6 +388,7 @@ pub mod ir {
                         max_write: writes.clone(),
                         local_reads: HashMap::from([(enode.clone(), reads)]),
                         local_writes: HashMap::from([(enode.clone(), writes)]),
+                        constant: None,
                     }
                 }
                 Mio::Table(params) => {
@@ -213,6 +408,7 @@ pub mod ir {
                         max_write: writes.clone(),
                         local_reads: HashMap::from([(enode.clone(), reads)]),
                         local_writes: HashMap::from([(enode.clone(), writes)]),
+                        constant: None,
                     }
                 }
                 Mio::Ite([cond, ib, eb]) => {
@@ -233,6 +429,7 @@ pub mod ir {
                         max_write: max_writes,
                         local_reads,
                         local_writes,
+                        constant: None,
                     }
                 }
                 Mio::BitNot(x) | Mio::LNot(x) => egraph[*x].data.clone(),
@@ -263,6 +460,11 @@ pub mod ir {
                         max_write: writes,
                         local_reads,
                         local_writes,
+                        constant: MioAnalysis::eval_binop(
+                            enode,
+                            egraph[*a].data.constant.clone(),
+                            egraph[*b].data.constant.clone(),
+                        ),
                     }
                 }
                 Mio::Store([field, val]) => {
@@ -277,6 +479,7 @@ pub mod ir {
                         max_write: writes,
                         local_reads,
                         local_writes,
+                        constant: None,
                     }
                 }
                 Mio::Load(field) => MioAnalysisData {
@@ -284,8 +487,16 @@ pub mod ir {
                     max_write: HashSet::new(),
                     local_reads: HashMap::from([(enode.clone(), HashSet::from([field.clone()]))]),
                     local_writes: HashMap::new(),
+                    constant: None,
                 },
-                Mio::Symbol(_) | Mio::Number(_) => Default::default(),
+                Mio::Constant(c) => MioAnalysisData {
+                    max_read: HashSet::new(),
+                    max_write: HashSet::new(),
+                    local_reads: HashMap::new(),
+                    local_writes: HashMap::new(),
+                    constant: Some(c.clone()),
+                },
+                Mio::Symbol(_) => Default::default(),
             }
         }
     }

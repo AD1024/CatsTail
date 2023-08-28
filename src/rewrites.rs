@@ -103,9 +103,9 @@ mod test {
             ]
             .into_iter(),
         );
-        let mut egraph = EGraph::new(MioAnalysis {});
+        let mut egraph = EGraph::new(MioAnalysis::default());
         let rt = egraph.add_expr(&prog);
-        let runner = Runner::<Mio, MioAnalysis>::new(MioAnalysis {});
+        let runner = Runner::<Mio, MioAnalysis>::new(MioAnalysis::default());
         let runner = runner.with_egraph(egraph).run(&rewrites);
         let egraph = runner.egraph;
         egraph.dot().to_pdf(PathBuf::from("test.pdf")).unwrap();
