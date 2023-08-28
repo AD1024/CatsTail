@@ -496,7 +496,15 @@ pub mod ir {
                     local_writes: HashMap::new(),
                     constant: Some(c.clone()),
                 },
-                Mio::Symbol(_) => Default::default(),
+                Mio::Symbol(_) => {
+                    MioAnalysisData {
+                        max_read: HashSet::new(),
+                        max_write: HashSet::new(),
+                        local_reads: HashMap::new(),
+                        local_writes: HashMap::new(),
+                        constant: egraph.analysis.context.get(&enode.to_string()).cloned(),
+                    }
+                }
             }
         }
     }
