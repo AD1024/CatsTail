@@ -2,7 +2,7 @@ use egg::{rewrite, EGraph, Id, Rewrite, Subst, Var};
 
 use crate::language::{
     self,
-    ir::{Mio, MioAnalysis},
+    ir::{Constant, Mio, MioAnalysis},
     utils::{get_dependency, Dependency},
 };
 
@@ -25,6 +25,16 @@ fn independent_actions(a1s: Var, a2s: Var) -> impl Fn(&mut EG, Id, &Subst) -> bo
             &egraph[c2].data.max_read,
             &egraph[c2].data.max_write,
         ) == Dependency::INDEPENDENT;
+    }
+}
+
+fn is_greater_eq(v1: Var, val: i32) -> impl Fn(&mut EG, Id, &Subst) -> bool {
+    move |egraph, _id, subst| {
+        let c1 = subst[v1];
+        return match &egraph[c1].data.constant {
+            Some(Constant::Int(c1)) => *c1 >= val,
+            _ => false,
+        };
     }
 }
 
@@ -58,6 +68,25 @@ pub fn join_properties() -> Vec<RW> {
                 =>
             "(join ?t2 ?t1)"
         ),
+    ]
+}
+
+pub fn alg_simpl() -> Vec<RW> {
+    vec![
+        rewrite!("add-sub-convert"; "(+ ?x (neg ?y))" => "(- ?x ?y)"),
+        rewrite!("sub-neg-convert"; "(- 0 ?x)" => "(neg ?x)"),
+        rewrite!("add-sub-elim"; "(- (+ ?x ?y) ?y)" => "?x"),
+        rewrite!("sub-conv"; "(- ?x (- ?y ?z))" => "(+ (- ?x ?y) ?z)"),
+        rewrite!("add-conv"; "(+ ?x (- ?y ?z))" => "(- (+ ?x ?y) ?z)"),
+        rewrite!("add-zero"; "(+ ?x 0)" => "?x"),
+        rewrite!("sub-zero"; "(- ?x 0)" => "?x"),
+        rewrite!("double-to-shift"; "(+ ?x ?x)" => "(bitshl ?x 1)"),
+        rewrite!("shl-shr-elim"; "(bitshr (bitshl ?x ?y) ?y)" => "?x"),
+        rewrite!("shl-sum"; "(bitshl ?x (+ ?y ?z)" => "(bitshl (bitshl ?x ?y) ?z)"),
+        rewrite!("shr-to-zero"; "(bitshr ?x ?y)" => "0" if is_greater_eq("?y".parse().unwrap(), 32)),
+        rewrite!("sub-elim"; "(- ?x ?x)" => "0"),
+        rewrite!("add-comm"; "(+ ?x ?y)" => "(+ ?y ?x)"),
+        rewrite!("add-assoc"; "(+ ?x (+ ?y ?z))" => "(+ (+ ?x ?y) ?z)"),
     ]
 }
 

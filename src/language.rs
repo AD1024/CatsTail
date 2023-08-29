@@ -36,6 +36,7 @@ pub mod ir {
             // Arithmetic operators
             "+" = Add([Id; 2]),
             "-" = Sub([Id; 2]),
+            "neg" = Neg(Id),
             "store" = Store([Id; 2]),
             "load" = Load(Id),
             // Comparators
@@ -45,6 +46,7 @@ pub mod ir {
             "<=" = Le([Id; 2]),
             ">=" = Ge([Id; 2]),
             "!=" = Neq([Id; 2]),
+            "global" = Global(Id),
             Constant(Constant),
             Symbol(String),
         }
@@ -295,6 +297,13 @@ pub mod ir {
 
         fn make(egraph: &egg::EGraph<Mio, Self>, enode: &Mio) -> Self::Data {
             match enode {
+                Mio::Global(_) => MioAnalysisData {
+                    max_read: HashSet::new(),
+                    max_write: HashSet::new(),
+                    local_reads: HashMap::new(),
+                    local_writes: HashMap::new(),
+                    constant: None,
+                },
                 Mio::Join(tables) => {
                     let reads = tables
                         .iter()
@@ -400,8 +409,8 @@ pub mod ir {
                     //          (list
                     //              (mapsto ?f3 ?v3) ...) ...)
                     //        ?parent)
-                    let mut reads = egraph[params[0]].data.max_read.clone();
-                    let mut writes = egraph[params[1]].data.max_write.clone();
+                    let reads = egraph[params[0]].data.max_read.clone();
+                    let writes = egraph[params[1]].data.max_write.clone();
 
                     MioAnalysisData {
                         max_read: reads.clone(),
@@ -432,7 +441,7 @@ pub mod ir {
                         constant: None,
                     }
                 }
-                Mio::BitNot(x) | Mio::LNot(x) => egraph[*x].data.clone(),
+                Mio::BitNot(x) | Mio::LNot(x) | Mio::Neg(x) => egraph[*x].data.clone(),
                 Mio::Add([a, b])
                 | Mio::Sub([a, b])
                 | Mio::BitAnd([a, b])
@@ -496,15 +505,13 @@ pub mod ir {
                     local_writes: HashMap::new(),
                     constant: Some(c.clone()),
                 },
-                Mio::Symbol(_) => {
-                    MioAnalysisData {
-                        max_read: HashSet::new(),
-                        max_write: HashSet::new(),
-                        local_reads: HashMap::new(),
-                        local_writes: HashMap::new(),
-                        constant: egraph.analysis.context.get(&enode.to_string()).cloned(),
-                    }
-                }
+                Mio::Symbol(_) => MioAnalysisData {
+                    max_read: HashSet::new(),
+                    max_write: HashSet::new(),
+                    local_reads: HashMap::new(),
+                    local_writes: HashMap::new(),
+                    constant: egraph.analysis.context.get(&enode.to_string()).cloned(),
+                },
             }
         }
     }
