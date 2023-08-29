@@ -1,4 +1,4 @@
-use egg::{rewrite, EGraph, Id, Rewrite, Subst, Var};
+use egg::{rewrite, Applier, EGraph, Id, Rewrite, Subst, Var};
 
 use crate::language::{
     self,
@@ -47,12 +47,25 @@ pub fn parallelize_independent_tables() -> RW {
                                 "?a2s".parse().unwrap()));
 }
 
-pub fn join_flatten() -> RW {
-    rewrite!("join-flatten";
-            "(join ?t1 (join ?t2 ?t3))"
-                =>
-            "(join ?t1 ?t2 ?t3)")
-}
+// pub fn list_properties() -> Vec<RW> {
+//     struct AppendEvalApplier(Var, Var);
+//     impl Applier<Mio, MioAnalysis> for AppendEvalApplier {
+//         fn apply_one(
+//             &self,
+//             egraph: &mut EGraph<Mio, MioAnalysis>,
+//             eclass: Id,
+//             subst: &Subst,
+//             searcher_ast: Option<&egg::PatternAst<Mio>>,
+//             rule_name: egg::Symbol,
+//         ) -> Vec<Id> {
+//             let c1 = subst[self.0];
+//             let c2 = subst[self.1];
+//         }
+//     }
+//     vec![
+//         rewrite!("append-eval"; "(append ?xs ?ys)" => { AppendEvalApplier("?xs".parse().unwrap(), "?ys".parse().unwrap()) }),
+//     ]
+// }
 
 pub fn join_properties() -> Vec<RW> {
     vec![
@@ -93,7 +106,7 @@ pub fn alg_simpl() -> Vec<RW> {
 mod test {
     use std::path::PathBuf;
 
-    use egg::{AstDepth, EGraph, Extractor, RecExpr, Runner};
+    use egg::{AstDepth, EGraph, Extractor, Pattern, RecExpr, Runner, Searcher};
 
     use crate::{
         extractors::GreedyExtractor,
@@ -108,7 +121,7 @@ mod test {
                                                 (mapsto f1
                                                         (bitxor f2 1))
                                                 (mapsto f4 f3)))
-                                    id
+                                    default
                             )
                             (table  (keys (= m3 const3))
                                     (actions
@@ -117,7 +130,7 @@ mod test {
                                     (table (keys (= m2 const2))
                                             (actions (list
                                                         (mapsto f5 (+ f5 1))))
-                                            id
+                                            default
                                     )
                                 )
                             )
@@ -125,13 +138,7 @@ mod test {
         .parse::<RecExpr<Mio>>()
         .unwrap();
         let mut rewrites = super::join_properties();
-        rewrites.extend(
-            [
-                super::join_flatten(),
-                super::parallelize_independent_tables(),
-            ]
-            .into_iter(),
-        );
+        rewrites.extend([super::parallelize_independent_tables()].into_iter());
         let mut egraph = EGraph::new(MioAnalysis::default());
         let rt = egraph.add_expr(&prog);
         let runner = Runner::<Mio, MioAnalysis>::new(MioAnalysis::default());
@@ -142,5 +149,6 @@ mod test {
         let (best_cost, best_expr) = extractor.find_best(rt);
         println!("best cost: {}", best_cost);
         println!("best expr: {}", best_expr.pretty(80));
+        println!("root type: {:?}", egraph[rt].data.checked_type);
     }
 }
