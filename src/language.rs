@@ -1,7 +1,6 @@
 use egg;
 
 pub mod ir {
-    use std::collections::hash_map::DefaultHasher;
     use std::ops;
     use std::{
         collections::{HashMap, HashSet},
@@ -204,7 +203,6 @@ pub mod ir {
     pub struct MioAnalysis {
         context: HashMap<String, Constant>,
         gamma: HashMap<String, MioType>,
-        meta_gamma: HashMap<i32, MioType>,
     }
 
     impl Default for MioAnalysis {
@@ -212,7 +210,6 @@ pub mod ir {
             MioAnalysis {
                 context: HashMap::new(),
                 gamma: HashMap::new(),
-                meta_gamma: HashMap::new(),
             }
         }
     }
@@ -222,7 +219,6 @@ pub mod ir {
             MioAnalysis {
                 context: ctx,
                 gamma,
-                meta_gamma: HashMap::new(),
             }
         }
 
@@ -343,6 +339,7 @@ pub mod ir {
                 })
                 .collect();
             let ty = self.type_unification(&a.checked_type, &b.checked_type);
+            // println!("Unify {:?} {:?} to {:?}", a.checked_type, b.checked_type, ty);
             let new = MioAnalysisData {
                 max_read,
                 max_write,
@@ -385,18 +382,20 @@ pub mod ir {
                         .unwrap_or_default();
                     let local_reads = HashMap::from([(enode.clone(), reads.clone())]);
                     let local_writes = HashMap::from([(enode.clone(), writes.clone())]);
-                    let checked_type = egraph.analysis.type_unification(
-                        &egraph[tables[0]].data.checked_type,
-                        &egraph[tables[1]].data.checked_type,
-                    );
-                    if let MioType::Table(_) = &checked_type {
+                    if let (MioType::Table(t1), MioType::Table(t2)) = (&egraph[tables[0]].data.checked_type, &egraph[tables[1]].data.checked_type) {
+                        let mut sizes = HashSet::new();
+                        for s1 in t1.iter() {
+                            for s2 in t2.iter() {
+                                sizes.insert(s1 + s2);
+                            }
+                        }
                         return MioAnalysisData {
                             max_read: reads,
                             max_write: writes,
                             local_reads,
                             local_writes,
                             constant: None,
-                            checked_type,
+                            checked_type: MioType::Table(sizes.into_iter().collect()),
                         };
                     }
                     panic!(
