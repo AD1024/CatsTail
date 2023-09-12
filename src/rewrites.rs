@@ -106,7 +106,7 @@ pub fn alg_simpl() -> Vec<RW> {
 mod test {
     use std::path::PathBuf;
 
-    use egg::{AstDepth, EGraph, Extractor, Pattern, RecExpr, Runner, Searcher, Language};
+    use egg::{AstDepth, EGraph, Extractor, Language, Pattern, RecExpr, Runner, Searcher};
 
     use crate::{
         extractors::GreedyExtractor,
@@ -150,6 +150,9 @@ mod test {
         println!("best cost: {}", best_cost);
         println!("best expr: {}", best_expr.pretty(80));
         println!("root type: {:?}", egraph[rt].data.checked_type);
-        println!("rb type : {:?}", egraph[egraph[rt].nodes[0].children()[2]].data.checked_type);
+        println!(
+            "rb type : {:?}",
+            egraph[egraph[rt].nodes[0].children()[2]].data.checked_type
+        );
     }
 }

@@ -288,10 +288,12 @@ pub mod ir {
         pub max_write: HashSet<Id>,
         pub constant: Option<Constant>,
         pub checked_type: MioType,
+        pub elaboration: HashSet<String>,
     }
 
     impl Default for MioAnalysisData {
         fn default() -> Self {
+            let x = 1;
             MioAnalysisData {
                 local_reads: HashMap::new(),
                 local_writes: HashMap::new(),
@@ -299,6 +301,7 @@ pub mod ir {
                 max_write: HashSet::new(),
                 constant: None,
                 checked_type: MioType::Unknown,
+                elaboration: HashSet::new(),
             }
         }
     }
@@ -347,6 +350,7 @@ pub mod ir {
                 local_writes,
                 constant: a.constant.clone().or(b.constant.clone()),
                 checked_type: ty,
+                elaboration: a.elaboration.union(&b.elaboration).cloned().collect(),
             };
             return egg::DidMerge(new != *a, new != b);
         }
@@ -360,6 +364,7 @@ pub mod ir {
                     local_writes: HashMap::new(),
                     constant: None,
                     checked_type: MioType::Table(vec![0]),
+                    elaboration: HashSet::new(),
                 },
                 Mio::Global(v) => MioAnalysisData {
                     max_read: HashSet::new(),
@@ -368,6 +373,7 @@ pub mod ir {
                     local_writes: HashMap::new(),
                     constant: None,
                     checked_type: egraph[*v].data.checked_type.clone(),
+                    elaboration: HashSet::new(),
                 },
                 Mio::Join(tables) => {
                     let reads = tables
@@ -382,7 +388,10 @@ pub mod ir {
                         .unwrap_or_default();
                     let local_reads = HashMap::from([(enode.clone(), reads.clone())]);
                     let local_writes = HashMap::from([(enode.clone(), writes.clone())]);
-                    if let (MioType::Table(t1), MioType::Table(t2)) = (&egraph[tables[0]].data.checked_type, &egraph[tables[1]].data.checked_type) {
+                    if let (MioType::Table(t1), MioType::Table(t2)) = (
+                        &egraph[tables[0]].data.checked_type,
+                        &egraph[tables[1]].data.checked_type,
+                    ) {
                         let mut sizes = HashSet::new();
                         for s1 in t1.iter() {
                             for s2 in t2.iter() {
@@ -396,6 +405,7 @@ pub mod ir {
                             local_writes,
                             constant: None,
                             checked_type: MioType::Table(sizes.into_iter().collect()),
+                            elaboration: HashSet::new(),
                         };
                     }
                     panic!(
@@ -422,6 +432,7 @@ pub mod ir {
                                 Box::new(egraph.analysis.type_unification(&ty_l, &ty_r)),
                                 len_l + len_r,
                             ),
+                            elaboration: HashSet::new(),
                         };
                     }
                     panic!(
@@ -469,6 +480,7 @@ pub mod ir {
                             ),
                             params.len(),
                         ),
+                        elaboration: HashSet::new(),
                     }
                 }
                 Mio::Store([field, value]) | Mio::MapsTo([field, value]) => {
@@ -485,6 +497,7 @@ pub mod ir {
                         max_write: writes,
                         constant: egraph[*value].data.constant.clone(),
                         checked_type: ty,
+                        elaboration: HashSet::new(),
                     }
                 }
                 Mio::Keys(keys) => {
@@ -506,6 +519,7 @@ pub mod ir {
                             local_writes: HashMap::from([(enode.clone(), HashSet::new())]),
                             constant: None,
                             checked_type: MioType::List(Box::new(MioType::Bool), keys.len()),
+                            elaboration: HashSet::new(),
                         };
                     }
                     panic!(
@@ -540,6 +554,7 @@ pub mod ir {
                         local_writes: HashMap::from([(enode.clone(), writes)]),
                         constant: None,
                         checked_type: MioType::ActionList(param_types.len()),
+                        elaboration: HashSet::new(),
                     }
                 }
                 Mio::Table(params) => {
@@ -568,6 +583,7 @@ pub mod ir {
                                 local_writes: HashMap::from([(enode.clone(), writes)]),
                                 constant: None,
                                 checked_type: MioType::Table(vec![key_len.clone()]),
+                                elaboration: HashSet::new(),
                             };
                         }
                         panic!(
@@ -607,6 +623,7 @@ pub mod ir {
                         local_writes,
                         constant: None,
                         checked_type: ty,
+                        elaboration: HashSet::new(),
                     }
                 }
                 Mio::BitNot(x) | Mio::Neg(x) => {
@@ -651,6 +668,7 @@ pub mod ir {
                             egraph[*b].data.constant.clone(),
                         ),
                         checked_type: MioType::Int,
+                        elaboration: HashSet::new(),
                     }
                 }
                 Mio::LAnd([a, b]) | Mio::LOr([a, b]) | Mio::LXor([a, b]) => {
@@ -677,6 +695,7 @@ pub mod ir {
                             egraph[*b].data.constant.clone(),
                         ),
                         checked_type: MioType::Bool,
+                        elaboration: HashSet::new(),
                     }
                 }
                 Mio::Eq([a, b])
@@ -708,6 +727,7 @@ pub mod ir {
                             egraph[*b].data.constant.clone(),
                         ),
                         checked_type: MioType::Bool,
+                        elaboration: HashSet::new(),
                     }
                 }
                 Mio::Load(field) => MioAnalysisData {
@@ -717,6 +737,7 @@ pub mod ir {
                     local_writes: HashMap::new(),
                     constant: None,
                     checked_type: egraph[*field].data.checked_type.clone(),
+                    elaboration: HashSet::new(),
                 },
                 Mio::Constant(c) => {
                     let ty = match c {
@@ -730,6 +751,7 @@ pub mod ir {
                         local_writes: HashMap::new(),
                         constant: Some(c.clone()),
                         checked_type: ty,
+                        elaboration: HashSet::new(),
                     }
                 }
                 Mio::Symbol(sym) => MioAnalysisData {
@@ -738,7 +760,7 @@ pub mod ir {
                     local_reads: HashMap::new(),
                     local_writes: HashMap::new(),
                     constant: egraph.analysis.context.get(&enode.to_string()).cloned(),
-                    checked_type: if (egraph.analysis.gamma.contains_key(sym)) {
+                    checked_type: if egraph.analysis.gamma.contains_key(sym) {
                         egraph.analysis.gamma[sym].clone()
                     } else {
                         // println!(
@@ -747,6 +769,7 @@ pub mod ir {
                         // );
                         MioType::Unknown
                     },
+                    elaboration: HashSet::new(),
                 },
             }
         }
@@ -843,5 +866,226 @@ pub mod utils {
         } else {
             panic!("merge_table called with non-table arguments");
         }
+    }
+}
+
+pub mod transforms {
+    use std::collections::HashMap;
+
+    use egg::{EGraph, Id};
+
+    use crate::p4::{
+        self,
+        p4ir::{BinOps, Expr, Stmt, UnOps},
+    };
+
+    use super::{
+        ir::{Constant, Mio, MioAnalysis},
+        *,
+    };
+
+    pub fn insert_expr(
+        expr: &p4::p4ir::Expr,
+        built: &HashMap<String, (Expr, Id)>,
+        egraph: &mut EGraph<Mio, MioAnalysis>,
+    ) -> Id {
+        match expr {
+            Expr::Int(v) => egraph.add(Mio::Constant(Constant::Int(*v))),
+            Expr::Bool(b) => egraph.add(Mio::Constant(Constant::Bool(*b))),
+            Expr::Var(name) => {
+                if let Some((_, r)) = built.get(name) {
+                    *r
+                } else {
+                    egraph.add(Mio::Symbol(name.clone()))
+                }
+            }
+            Expr::BinOpExpr(op, lhs, rhs) => {
+                let lhs_id = insert_expr(lhs, built, egraph);
+                let rhs_id = insert_expr(rhs, built, egraph);
+                egraph.add(op.to_mio(lhs_id, rhs_id))
+            }
+            Expr::UnOpExpr(op, expr) => {
+                let expr_id = insert_expr(expr, built, egraph);
+                egraph.add(op.to_mio(expr_id))
+            }
+        }
+    }
+
+    fn walk_stmt(
+        stmt: &Stmt,
+        built: &mut HashMap<String, (Expr, Id)>,
+        condition: &Expr,
+        egraph: &mut EGraph<Mio, MioAnalysis>,
+    ) {
+        match stmt {
+            Stmt::Block(stmts) => {
+                for stmt in stmts {
+                    walk_stmt(stmt, built, condition, egraph);
+                }
+            }
+            Stmt::Assign(field, v) => {
+                if let Expr::Var(field) = field {
+                    let v_id = insert_expr(v, built, egraph);
+                    built.insert(field.clone(), (condition.clone(), v_id));
+                } else {
+                    panic!("Assigning to non-variable");
+                }
+            }
+            Stmt::If(cond, ib, eb) => {
+                let mut ib_built = HashMap::new();
+                let mut eb_built = HashMap::new();
+                walk_stmt(ib, &mut ib_built, cond, egraph);
+                walk_stmt(
+                    eb,
+                    &mut eb_built,
+                    &Expr::UnOpExpr(UnOps::Not, Box::new(cond.clone())),
+                    egraph,
+                );
+                // In theory we can use an SMT solver to check whether path conditions are
+                // negations of each other; this will gives us a compact ite representation.
+                // w/o SMT, we can get an ite representation in the form of
+                // ite(c1, e1, ite(c2, e2, ...)) fall-through to default value
+                for ib_k in ib_built.keys() {
+                    if eb_built.contains_key(ib_k) {
+                        let ib_v = ib_built.get(ib_k).unwrap();
+                        let eb_v = eb_built.get(ib_k).unwrap();
+                        let eb = if built.contains_key(ib_k) {
+                            built.get(ib_k).unwrap().1.clone()
+                        } else {
+                            egraph.add(Mio::Symbol(ib_k.clone()))
+                        };
+                        let eb_vid = insert_expr(&eb_v.0, built, egraph);
+                        let e = Mio::Ite([
+                            insert_expr(&ib_v.0, built, egraph),
+                            ib_v.1.clone(),
+                            egraph.add(Mio::Ite([eb_vid, eb_v.1.clone(), eb])),
+                        ]);
+                        let new_id = egraph.add(e);
+                        built.insert(ib_k.clone(), (condition.clone(), new_id));
+                        eb_built.remove(ib_k);
+                    } else {
+                        let ib_v = ib_built.get(ib_k).unwrap();
+                        let eb = if built.contains_key(ib_k) {
+                            built.get(ib_k).unwrap().1.clone()
+                        } else {
+                            egraph.add(Mio::Symbol(ib_k.clone()))
+                        };
+                        let e = Mio::Ite([insert_expr(&ib_v.0, built, egraph), ib_v.1.clone(), eb]);
+                        let new_id = egraph.add(e);
+                        built.insert(ib_k.clone(), (condition.clone(), new_id));
+                    }
+                }
+                for eb_k in eb_built.keys() {
+                    let eb_v = eb_built.get(eb_k).unwrap();
+                    let ib = if built.contains_key(eb_k) {
+                        built.get(eb_k).unwrap().1.clone()
+                    } else {
+                        egraph.add(Mio::Symbol(eb_k.clone()))
+                    };
+                    let e = Mio::Ite([
+                        insert_expr(&eb_v.0, built, egraph),
+                        eb_v.1.clone(),
+                        ib.clone(),
+                    ]);
+                    let new_id = egraph.add(e);
+                    built.insert(eb_k.clone(), (condition.clone(), new_id));
+                }
+            }
+        }
+    }
+
+    pub fn stmt_to_egraph(stmt: &Stmt) -> (EGraph<Mio, MioAnalysis>, HashMap<String, (Expr, Id)>) {
+        let mut egraph = EGraph::new(MioAnalysis::default());
+        let mut built = HashMap::new();
+        walk_stmt(stmt, &mut built, &Expr::Bool(true), &mut egraph);
+        (egraph, built)
+    }
+}
+
+mod test {
+    use std::collections::{HashMap, HashSet};
+
+    use egg::{EGraph, Id, Language, RecExpr};
+
+    use super::{
+        ir::{Mio, MioAnalysis},
+        transforms::stmt_to_egraph,
+    };
+    use crate::p4::{
+        macros::*,
+        p4ir::{Expr, Stmt},
+    };
+
+    fn run_walk_stmt(stmts: Stmt) {
+        let (egraph, built) = stmt_to_egraph(&stmts);
+        egraph.dot().to_pdf("stmt_to_egraph.pdf").unwrap();
+        println!("Stmt:\n{:?}", stmts);
+        for (v, (_, rt)) in built.iter() {
+            println!("{}: {}", v, extract_unit(&egraph, *rt).pretty(80))
+        }
+    }
+
+    fn extract_unit(egraph: &EGraph<Mio, MioAnalysis>, root: Id) -> RecExpr<Mio> {
+        let mut worklist = vec![root];
+        let mut visited = HashSet::new();
+        let mut mem: HashMap<Id, Id> = HashMap::new();
+        visited.insert(root);
+
+        let mut result = RecExpr::<Mio>::default();
+
+        while !worklist.is_empty() {
+            let front = *worklist.last().unwrap();
+            let node = egraph[front].nodes[0].clone();
+            let mut ok = true;
+            for child in node.children() {
+                if !visited.contains(&child) {
+                    worklist.push(child.clone());
+                    ok = false;
+                }
+            }
+            if ok {
+                let new_id = result.add(node.map_children(|c| mem[&c]));
+                mem.insert(front, new_id);
+                visited.insert(front);
+                worklist.pop();
+            }
+        }
+        return result;
+    }
+
+    #[test]
+    fn test_walk_stmt() {
+        let stmt1 = Stmt::Block(vec![
+            Stmt::Assign(Expr::Var("a".to_string()), Expr::Int(1)),
+            Stmt::Assign(Expr::Var("b".to_string()), Expr::Int(2)),
+            Stmt::If(
+                Expr::Var("c".to_string()),
+                Box::new(Stmt::Assign(Expr::Var("a".to_string()), Expr::Int(3))),
+                Box::new(Stmt::Assign(Expr::Var("b".to_string()), Expr::Int(4))),
+            ),
+        ]);
+        run_walk_stmt(stmt1);
+
+        let stmt2 = block!(
+            assign!("a" => Expr::Int(1)),
+            assign!("b" => Expr::Int(2)),
+            ite!(
+                var!("c1"),
+                ite!(
+                    var!("c2"),
+                    assign!("a" => Expr::Int(3)),
+                    assign!("b" => Expr::Int(4))
+                ),
+                block!(
+                    assign!("a" => Expr::Int(5)),
+                    ite!(
+                        and!(var!("c3"), var!("c4")),
+                        assign!("b" => Expr::Int(6)),
+                        assign!("b" => Expr::Int(7))
+                    )
+                )
+            )
+        );
+        run_walk_stmt(stmt2);
     }
 }
