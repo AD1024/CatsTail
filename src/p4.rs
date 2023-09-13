@@ -117,8 +117,8 @@ pub mod macros {
         };
     }
     macro_rules! not {
-        (($e1:expr)) => {
-            Expr::UnOpExpr($crate::p4::p4ir::BinOps::Not, Box::new($e1))
+        ($e1:expr) => {
+            Expr::UnOpExpr($crate::p4::p4ir::UnOps::Not, Box::new($e1))
         };
     }
     macro_rules! xor {
@@ -164,7 +164,7 @@ pub mod macros {
         };
     }
     macro_rules! add {
-        (($e1:expr), ($e2:expr)) => {
+        ($e1:expr, $e2:expr) => {
             Expr::BinOpExpr($crate::p4::p4ir::BinOps::Add, Box::new($e1), Box::new($e2))
         };
     }

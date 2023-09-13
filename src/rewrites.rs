@@ -103,6 +103,19 @@ pub fn alg_simpl() -> Vec<RW> {
     ]
 }
 
+pub fn predicate_rewrites() -> Vec<RW> {
+    vec![
+        rewrite!("and-elim-left"; "(land ?x false)" => "false"),
+        rewrite!("and-elim-right"; "(land ?x true)" => "?x"),
+        rewrite!("and-comm"; "(land ?x ?y)" => "(land ?y ?x)"),
+        rewrite!("and-assoc"; "(land ?x (land ?y ?z))" => "(land (land ?x ?y) ?z)"),
+        rewrite!("ite-collapse"; "(ite ?c1 ?t3 (ite ?c2 ?t1 ?t2))" => "(ite ?c1 ?t3 ?t1)"), // iff c1 <=> not c2
+        rewrite!("ite-true"; "(ite true ?t1 ?t2)" => "?t1"),
+        rewrite!("ite-false"; "(ite false ?t1 ?t2)" => "?t2"),
+        rewrite!("ite-same"; "(ite ?c ?t ?t)" => "?t"),
+    ]
+}
+
 mod test {
     use std::path::PathBuf;
 

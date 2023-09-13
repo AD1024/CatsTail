@@ -870,13 +870,16 @@ pub mod utils {
 }
 
 pub mod transforms {
-    use std::collections::HashMap;
+    use std::{cell::RefCell, collections::HashMap, ops::Deref, rc::Rc};
 
     use egg::{EGraph, Id};
 
-    use crate::p4::{
-        self,
-        p4ir::{BinOps, Expr, Stmt, UnOps},
+    use crate::{
+        p4::{
+            self,
+            p4ir::{BinOps, Expr, Stmt, UnOps},
+        },
+        utils::RegionedMap,
     };
 
     use super::{
@@ -886,15 +889,15 @@ pub mod transforms {
 
     pub fn insert_expr(
         expr: &p4::p4ir::Expr,
-        built: &HashMap<String, (Expr, Id)>,
+        built: &RegionedMap<String, (Expr, Id)>,
         egraph: &mut EGraph<Mio, MioAnalysis>,
     ) -> Id {
         match expr {
             Expr::Int(v) => egraph.add(Mio::Constant(Constant::Int(*v))),
             Expr::Bool(b) => egraph.add(Mio::Constant(Constant::Bool(*b))),
             Expr::Var(name) => {
-                if let Some((_, r)) = built.get(name) {
-                    *r
+                if let Some(v) = built.get(name) {
+                    v.1
                 } else {
                     egraph.add(Mio::Symbol(name.clone()))
                 }
@@ -913,31 +916,37 @@ pub mod transforms {
 
     fn walk_stmt(
         stmt: &Stmt,
-        built: &mut HashMap<String, (Expr, Id)>,
+        built: RegionedMap<String, (Expr, Id)>,
         condition: &Expr,
         egraph: &mut EGraph<Mio, MioAnalysis>,
-    ) {
+    ) -> RegionedMap<String, (Expr, Id)> {
         match stmt {
             Stmt::Block(stmts) => {
+                let mut c = built;
                 for stmt in stmts {
-                    walk_stmt(stmt, built, condition, egraph);
+                    c = walk_stmt(stmt, c, condition, egraph);
                 }
+                c
             }
             Stmt::Assign(field, v) => {
                 if let Expr::Var(field) = field {
-                    let v_id = insert_expr(v, built, egraph);
-                    built.insert(field.clone(), (condition.clone(), v_id));
+                    let v_id = insert_expr(v, &built, egraph);
+                    let mut c = built;
+                    c.insert(field.clone(), (condition.clone(), v_id));
+                    c
                 } else {
                     panic!("Assigning to non-variable");
                 }
             }
             Stmt::If(cond, ib, eb) => {
-                let mut ib_built = HashMap::new();
-                let mut eb_built = HashMap::new();
-                walk_stmt(ib, &mut ib_built, cond, egraph);
-                walk_stmt(
+                let mut current = built.clone();
+                let parent = Rc::new(built);
+                let ib_built = RegionedMap::new(Some(parent.clone()));
+                let eb_built = RegionedMap::new(Some(parent));
+                let ib_built = walk_stmt(ib, ib_built, cond, egraph);
+                let mut eb_built = walk_stmt(
                     eb,
-                    &mut eb_built,
+                    eb_built,
                     &Expr::UnOpExpr(UnOps::Not, Box::new(cond.clone())),
                     egraph,
                 );
@@ -946,58 +955,68 @@ pub mod transforms {
                 // w/o SMT, we can get an ite representation in the form of
                 // ite(c1, e1, ite(c2, e2, ...)) fall-through to default value
                 for ib_k in ib_built.keys() {
-                    if eb_built.contains_key(ib_k) {
-                        let ib_v = ib_built.get(ib_k).unwrap();
-                        let eb_v = eb_built.get(ib_k).unwrap();
-                        let eb = if built.contains_key(ib_k) {
-                            built.get(ib_k).unwrap().1.clone()
+                    if eb_built.contains_key_local(ib_k) {
+                        let ib_v = ib_built.get_local(ib_k).unwrap().clone();
+                        let eb_v = eb_built.get_local(ib_k).unwrap().clone();
+                        let eb = if current.contains_key(ib_k) {
+                            let (cond, body) = current.get(ib_k).unwrap();
+                            let default_branch = insert_expr(cond, &current, egraph);
+                            let sym = egraph.add(Mio::Symbol(ib_k.clone()));
+                            egraph.add(Mio::Ite([default_branch, body.clone(), sym]))
                         } else {
                             egraph.add(Mio::Symbol(ib_k.clone()))
                         };
-                        let eb_vid = insert_expr(&eb_v.0, built, egraph);
+                        let eb_vid = insert_expr(&eb_v.0, &current, egraph);
                         let e = Mio::Ite([
-                            insert_expr(&ib_v.0, built, egraph),
+                            insert_expr(&ib_v.0, &current, egraph),
                             ib_v.1.clone(),
                             egraph.add(Mio::Ite([eb_vid, eb_v.1.clone(), eb])),
                         ]);
                         let new_id = egraph.add(e);
-                        built.insert(ib_k.clone(), (condition.clone(), new_id));
+                        current.insert(ib_k.clone(), (condition.clone(), new_id));
                         eb_built.remove(ib_k);
                     } else {
-                        let ib_v = ib_built.get(ib_k).unwrap();
-                        let eb = if built.contains_key(ib_k) {
-                            built.get(ib_k).unwrap().1.clone()
+                        let ib_v = ib_built.get_local(ib_k).unwrap().clone();
+                        let eb = if current.contains_key(ib_k) {
+                            let (cond, value) = current.get(ib_k).unwrap();
+                            let default_branch = insert_expr(cond, &current, egraph);
+                            let sym = egraph.add(Mio::Symbol(ib_k.clone()));
+                            egraph.add(Mio::Ite([default_branch, value.clone(), sym]))
                         } else {
                             egraph.add(Mio::Symbol(ib_k.clone()))
                         };
-                        let e = Mio::Ite([insert_expr(&ib_v.0, built, egraph), ib_v.1.clone(), eb]);
+                        let e =
+                            Mio::Ite([insert_expr(&ib_v.0, &current, egraph), ib_v.1.clone(), eb]);
                         let new_id = egraph.add(e);
-                        built.insert(ib_k.clone(), (condition.clone(), new_id));
+                        current.insert(ib_k.clone(), (condition.clone(), new_id));
                     }
                 }
                 for eb_k in eb_built.keys() {
-                    let eb_v = eb_built.get(eb_k).unwrap();
-                    let ib = if built.contains_key(eb_k) {
-                        built.get(eb_k).unwrap().1.clone()
+                    let eb_v = eb_built.get(eb_k).unwrap().clone();
+                    let ib = if current.contains_key(eb_k) {
+                        current.get(eb_k).unwrap().1.clone()
                     } else {
                         egraph.add(Mio::Symbol(eb_k.clone()))
                     };
                     let e = Mio::Ite([
-                        insert_expr(&eb_v.0, built, egraph),
+                        insert_expr(&eb_v.0, &current, egraph),
                         eb_v.1.clone(),
                         ib.clone(),
                     ]);
                     let new_id = egraph.add(e);
-                    built.insert(eb_k.clone(), (condition.clone(), new_id));
+                    current.insert(eb_k.clone(), (condition.clone(), new_id));
                 }
+                current
             }
         }
     }
 
-    pub fn stmt_to_egraph(stmt: &Stmt) -> (EGraph<Mio, MioAnalysis>, HashMap<String, (Expr, Id)>) {
+    pub fn stmt_to_egraph(
+        stmt: &Stmt,
+    ) -> (EGraph<Mio, MioAnalysis>, RegionedMap<String, (Expr, Id)>) {
         let mut egraph = EGraph::new(MioAnalysis::default());
-        let mut built = HashMap::new();
-        walk_stmt(stmt, &mut built, &Expr::Bool(true), &mut egraph);
+        let built = RegionedMap::default();
+        let built = walk_stmt(stmt, built, &Expr::Bool(true), &mut egraph);
         (egraph, built)
     }
 }
@@ -1020,8 +1039,8 @@ mod test {
         let (egraph, built) = stmt_to_egraph(&stmts);
         egraph.dot().to_pdf("stmt_to_egraph.pdf").unwrap();
         println!("Stmt:\n{:?}", stmts);
-        for (v, (_, rt)) in built.iter() {
-            println!("{}: {}", v, extract_unit(&egraph, *rt).pretty(80))
+        for (v, val) in built.iter() {
+            println!("{}: {}", v, extract_unit(&egraph, val.1).pretty(80))
         }
     }
 
@@ -1055,6 +1074,26 @@ mod test {
 
     #[test]
     fn test_walk_stmt() {
+        let stmt = block!(
+            assign!("a" => Expr::Int(1)),
+            ite!(
+                var!("c1"),
+                block!(
+                    ite!(not!(var!("c3")), assign!("b" => Expr::Int(10)), block!()),
+                    ite!(
+                        var!("c2"),
+                        ite!(
+                            var!("c3"),
+                            assign!("a" => Expr::Int(2)),
+                            assign!("a" => var!("b"))
+                        ),
+                        assign!("a" => Expr::Int(4))
+                    )
+                ),
+                assign!("a" => Expr::Int(5))
+            )
+        );
+        run_walk_stmt(stmt);
         let stmt1 = Stmt::Block(vec![
             Stmt::Assign(Expr::Var("a".to_string()), Expr::Int(1)),
             Stmt::Assign(Expr::Var("b".to_string()), Expr::Int(2)),
@@ -1073,15 +1112,18 @@ mod test {
                 var!("c1"),
                 ite!(
                     var!("c2"),
-                    assign!("a" => Expr::Int(3)),
+                    assign!("a" => var!("b")),
                     assign!("b" => Expr::Int(4))
                 ),
                 block!(
-                    assign!("a" => Expr::Int(5)),
+                    ite!(var!("c4"), assign!("a" => Expr::Int(5)), block!()),
                     ite!(
                         and!(var!("c3"), var!("c4")),
                         assign!("b" => Expr::Int(6)),
-                        assign!("b" => Expr::Int(7))
+                        block!(
+                            assign!("b" => Expr::Int(7)),
+                            assign!("a" => add!(var!("a"), var!("b")))
+                        )
                     )
                 )
             )
