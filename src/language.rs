@@ -82,6 +82,18 @@ pub mod ir {
         }
     }
 
+    impl From<i32> for Constant {
+        fn from(i: i32) -> Self {
+            Constant::Int(i)
+        }
+    }
+
+    impl From<bool> for Constant {
+        fn from(b: bool) -> Self {
+            Constant::Bool(b)
+        }
+    }
+
     impl FromStr for Constant {
         type Err = ();
 
@@ -179,7 +191,7 @@ pub mod ir {
         fn not(self) -> Self::Output {
             match self {
                 Constant::Int(a) => Constant::Int(!a),
-                _ => panic!("Bitwise not of non-integers"),
+                Constant::Bool(b) => Constant::Bool(!b),
             }
         }
     }
@@ -251,6 +263,15 @@ pub mod ir {
                 (_, MioType::Unknown) => lhs_ty.clone(),
                 (_, _) => panic!("Cannot unify types {:?} and {:?}", lhs_ty, rhs_ty),
             }
+        }
+
+        pub fn eval_unop(expr: &Mio, x: Option<Constant>) -> Option<Constant> {
+            Some(match expr {
+                Mio::Neg(_) => Constant::Int(0) - (x?),
+                Mio::LNot(_) => !(x?),
+                Mio::BitNot(_) => !(x?),
+                _ => panic!("eval_unop called with non-unary operator"),
+            })
         }
 
         pub fn eval_binop(
@@ -777,12 +798,12 @@ pub mod ir {
 }
 
 pub mod utils {
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
 
-    use egg::Id;
+    use egg::{Id, RecExpr};
 
     use super::{
-        ir::{Mio, MioAnalysis},
+        ir::{Constant, Mio, MioAnalysis},
         *,
     };
 
@@ -822,50 +843,66 @@ pub mod utils {
         result
     }
 
-    pub fn merge_branch(lhs: &Mio, rhs: &Mio) {}
-
-    pub fn merge_table(
-        egraph: &mut egg::EGraph<Mio, MioAnalysis>,
-        lhs: &Mio,
-        rhs: &Mio,
-        lhs_reads: &HashSet<Id>,
-        lhs_writes: &HashSet<Id>,
-        rhs_reads: &HashSet<Id>,
-        rhs_writes: &HashSet<Id>,
-    ) -> Option<Id> {
-        if let (Mio::Table(lhs_params), Mio::Table(rhs_params)) = (lhs, rhs) {
-            match get_dependency(lhs_reads, lhs_writes, rhs_reads, rhs_writes) {
-                Dependency::UNKNOWN => None,
-                Dependency::WAW => {
-                    let predicates_lhs = lhs_params[..lhs_params.len() / 2].to_vec();
-                    let predicates_rhs = rhs_params[..rhs_params.len() / 2].to_vec();
-                    let branches_lhs =
-                        lhs_params[lhs_params.len() / 2..lhs_params.len() - 1].to_vec();
-                    let branches_rhs =
-                        rhs_params[rhs_params.len() / 2..rhs_params.len() - 1].to_vec();
-
-                    let mut new_predicates = Vec::new();
-                    let mut new_branches = Vec::new();
-                    for (lb, lp) in branches_lhs.iter().zip(predicates_lhs.iter()) {
-                        for (rb, rp) in branches_rhs.iter().zip(predicates_rhs.iter()) {
-                            let lb_data = &egraph[*lb].data;
-                            let rb_data = &egraph[*rb].data;
-                            if lb_data.max_write.intersection(&rb_data.max_write).count() == 0 {
-                                // Independent branches
-                                new_predicates.push(lp.clone());
-                                new_branches.push(lb.clone());
-                                new_predicates.push(rp.clone());
-                                new_branches.push(rb.clone());
-                            }
-                        }
+    /// Big-step semantics of Mio
+    fn interp_rec(rt: usize, expr: &RecExpr<Mio>, ctx: &HashMap<String, Mio>) -> Mio {
+        let current = &expr.as_ref()[rt];
+        match current {
+            Mio::Ite([cond, lb, rb]) => {
+                if let Mio::Constant(Constant::Bool(b)) = interp_rec(usize::from(*cond), expr, ctx)
+                {
+                    if b {
+                        interp_rec(usize::from(*lb), expr, ctx)
+                    } else {
+                        interp_rec(usize::from(*rb), expr, ctx)
                     }
-                    todo!()
+                } else {
+                    panic!("Condition of ite must evaluate to a boolean");
                 }
-                _ => unimplemented!(),
             }
-        } else {
-            panic!("merge_table called with non-table arguments");
+            Mio::Constant(_) => current.clone(),
+            Mio::Symbol(s) => {
+                if let Some(c) = ctx.get(s) {
+                    c.clone()
+                } else {
+                    current.clone()
+                }
+            }
+            Mio::BitAnd([lhs, rhs])
+            | Mio::BitOr([lhs, rhs])
+            | Mio::BitXor([lhs, rhs])
+            | Mio::BitShl([lhs, rhs])
+            | Mio::BitShr([lhs, rhs])
+            | Mio::Add([lhs, rhs])
+            | Mio::Sub([lhs, rhs])
+            | Mio::Eq([lhs, rhs])
+            | Mio::Lt([lhs, rhs])
+            | Mio::Gt([lhs, rhs])
+            | Mio::Le([lhs, rhs])
+            | Mio::Ge([lhs, rhs])
+            | Mio::Neq([lhs, rhs])
+            | Mio::LAnd([lhs, rhs])
+            | Mio::LOr([lhs, rhs]) => {
+                let lhs = interp_rec(usize::from(*lhs), expr, ctx);
+                let rhs = interp_rec(usize::from(*rhs), expr, ctx);
+                if let (Mio::Constant(c1), Mio::Constant(c2)) = (lhs, rhs) {
+                    Mio::Constant(MioAnalysis::eval_binop(current, Some(c1), Some(c2)).unwrap())
+                } else {
+                    current.clone()
+                }
+            }
+            Mio::Neg(x) | Mio::BitNot(x) | Mio::LNot(x) => {
+                if let Mio::Constant(c) = interp_rec(usize::from(*x), expr, ctx) {
+                    Mio::Constant(MioAnalysis::eval_unop(current, Some(c)).unwrap())
+                } else {
+                    current.clone()
+                }
+            }
+            _ => unimplemented!(),
         }
+    }
+
+    pub fn interp_recexpr(expr: &RecExpr<Mio>, ctx: &HashMap<String, Mio>) -> Mio {
+        interp_rec(0, expr, ctx)
     }
 }
 
@@ -1027,20 +1064,35 @@ mod test {
     use egg::{EGraph, Id, Language, RecExpr};
 
     use super::{
-        ir::{Mio, MioAnalysis},
+        ir::{Constant, Mio, MioAnalysis},
         transforms::stmt_to_egraph,
     };
-    use crate::p4::{
-        macros::*,
-        p4ir::{Expr, Stmt},
+    use crate::{
+        language::utils::interp_recexpr,
+        p4::{
+            macros::*,
+            p4ir::{interp, Expr, Stmt},
+        },
     };
 
-    fn run_walk_stmt(stmts: Stmt) {
+    fn run_walk_stmt(stmts: Stmt, ctx: &HashMap<String, Mio>) {
         let (egraph, built) = stmt_to_egraph(&stmts);
-        egraph.dot().to_pdf("stmt_to_egraph.pdf").unwrap();
+        // egraph.dot().to_pdf("stmt_to_egraph.pdf").unwrap();
         println!("Stmt:\n{:?}", stmts);
+        let mut ctx = ctx.clone();
+        interp(&stmts, &mut ctx);
         for (v, val) in built.iter() {
-            println!("{}: {}", v, extract_unit(&egraph, val.1).pretty(80))
+            let expr = extract_unit(&egraph, val.1);
+            // println!("{}: {}", v, expr.pretty(80));
+            let result = interp_recexpr(&expr, &ctx);
+            let default = &Mio::Symbol(v.clone());
+            let stmt_eval = ctx.get(v).unwrap_or(default);
+            println!(
+                "Stmt eval: {:?}",
+                ctx.get(v).unwrap_or(&Mio::Symbol(v.clone()))
+            );
+            println!("Mio eval: {:?}", result);
+            assert_eq!(stmt_eval, &result);
         }
     }
 
@@ -1074,6 +1126,13 @@ mod test {
 
     #[test]
     fn test_walk_stmt() {
+        let ctx = HashMap::from([
+            ("c1".to_string(), Mio::Constant(Constant::Bool(true))),
+            ("c2".to_string(), Mio::Constant(Constant::Bool(false))),
+            ("c3".to_string(), Mio::Constant(Constant::Bool(false))),
+            ("c4".to_string(), Mio::Constant(Constant::Bool(true))),
+            ("c".to_string(), Mio::Constant(Constant::Bool(true))),
+        ]);
         let stmt = block!(
             assign!("a" => Expr::Int(1)),
             ite!(
@@ -1093,7 +1152,7 @@ mod test {
                 assign!("a" => Expr::Int(5))
             )
         );
-        run_walk_stmt(stmt);
+        run_walk_stmt(stmt, &ctx);
         let stmt1 = Stmt::Block(vec![
             Stmt::Assign(Expr::Var("a".to_string()), Expr::Int(1)),
             Stmt::Assign(Expr::Var("b".to_string()), Expr::Int(2)),
@@ -1103,7 +1162,7 @@ mod test {
                 Box::new(Stmt::Assign(Expr::Var("b".to_string()), Expr::Int(4))),
             ),
         ]);
-        run_walk_stmt(stmt1);
+        run_walk_stmt(stmt1, &ctx);
 
         let stmt2 = block!(
             assign!("a" => Expr::Int(1)),
@@ -1116,7 +1175,7 @@ mod test {
                     assign!("b" => Expr::Int(4))
                 ),
                 block!(
-                    ite!(var!("c4"), assign!("a" => Expr::Int(5)), block!()),
+                    assign!("a" => Expr::Int(5)),
                     ite!(
                         and!(var!("c3"), var!("c4")),
                         assign!("b" => Expr::Int(6)),
@@ -1128,6 +1187,6 @@ mod test {
                 )
             )
         );
-        run_walk_stmt(stmt2);
+        run_walk_stmt(stmt2, &ctx);
     }
 }

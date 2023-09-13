@@ -1,7 +1,12 @@
 pub mod p4ir {
-    use egg::Id;
+    use std::collections::HashMap;
 
-    use crate::language::ir::Mio;
+    use egg::{Id, RecExpr};
+
+    use crate::language::{
+        ir::{Constant, Mio},
+        utils::interp_recexpr,
+    };
 
     #[derive(Debug, Clone)]
     pub enum BinOps {
@@ -76,11 +81,65 @@ pub mod p4ir {
         UnOpExpr(UnOps, Box<Expr>),
     }
 
+    impl Expr {
+        fn to_mio_helper(expr: &Self, result: &mut RecExpr<Mio>) -> Id {
+            match expr {
+                Expr::Int(i) => result.add(Mio::Constant((*i).into())),
+                Expr::Bool(b) => result.add(Mio::Constant((*b).into())),
+                Expr::Var(v) => result.add(Mio::Symbol(v.clone())),
+                Expr::BinOpExpr(op, lhs, rhs) => {
+                    let lhs = Self::to_mio_helper(lhs, result);
+                    let rhs = Self::to_mio_helper(rhs, result);
+                    result.add(op.to_mio(lhs, rhs))
+                }
+                Expr::UnOpExpr(op, arg) => {
+                    let arg = Self::to_mio_helper(arg, result);
+                    result.add(op.to_mio(arg))
+                }
+            }
+        }
+        pub fn to_recexpr(expr: &Self) -> RecExpr<Mio> {
+            let mut result = RecExpr::default();
+            Self::to_mio_helper(expr, &mut result);
+            result
+        }
+    }
+
     #[derive(Debug, Clone)]
     pub enum Stmt {
         Assign(Expr, Expr),
         If(Expr, Box<Stmt>, Box<Stmt>),
         Block(Vec<Stmt>),
+    }
+
+    pub fn interp(stmt: &Stmt, ctx: &mut HashMap<String, Mio>) {
+        match stmt {
+            Stmt::Block(stmts) => {
+                for stmt in stmts {
+                    interp(stmt, ctx);
+                }
+            }
+            Stmt::If(cond, lb, rb) => {
+                let cond = interp_recexpr(&Expr::to_recexpr(cond), ctx);
+                if let Mio::Constant(Constant::Bool(cond)) = cond {
+                    if cond {
+                        interp(lb, ctx);
+                    } else {
+                        interp(rb, ctx);
+                    }
+                } else {
+                    panic!("Condition is not a boolean");
+                }
+            }
+            Stmt::Assign(field, value) => {
+                let value = interp_recexpr(&Expr::to_recexpr(value), ctx);
+                if let Expr::Var(field) = field {
+                    ctx.insert(field.clone(), value);
+                } else {
+                    panic!("LHS of assignment is not a variable");
+                }
+            }
+        }
     }
 }
 
@@ -169,57 +228,57 @@ pub mod macros {
         };
     }
     macro_rules! sub {
-        (($e1:expr), ($e2:expr)) => {
+        ($e1:expr, $e2:expr) => {
             Expr::BinOpExpr($crate::p4::p4ir::BinOps::Sub, Box::new($e1), Box::new($e2))
         };
     }
     macro_rules! mul {
-        (($e1:expr), ($e2:expr)) => {
+        ($e1:expr, $e2:expr) => {
             Expr::BinOpExpr($crate::p4::p4ir::BinOps::Mul, Box::new($e1), Box::new($e2))
         };
     }
     macro_rules! div {
-        (($e1:expr), ($e2:expr)) => {
+        ($e1:expr, $e2:expr) => {
             Expr::BinOpExpr($crate::p4::p4ir::BinOps::Div, Box::new($e1), Box::new($e2))
         };
     }
     macro_rules! shl {
-        (($e1:expr), ($e2:expr)) => {
+        ($e1:expr, $e2:expr) => {
             Expr::BinOpExpr($crate::p4::p4ir::BinOps::Shl, Box::new($e1), Box::new($e2))
         };
     }
     macro_rules! shr {
-        (($e1:expr), ($e2:expr)) => {
+        ($e1:expr, $e2:expr) => {
             Expr::BinOpExpr($crate::p4::p4ir::BinOps::Shr, Box::new($e1), Box::new($e2))
         };
     }
     macro_rules! eq {
-        (($e1:expr), ($e2:expr)) => {
+        ($e1:expr, $e2:expr) => {
             Expr::BinOpExpr($crate::p4::p4ir::BinOps::Eq, Box::new($e1), Box::new($e2))
         };
     }
     macro_rules! ne {
-        (($e1:expr), ($e2:expr)) => {
+        ($e1:expr, $e2:expr) => {
             Expr::BinOpExpr($crate::p4::p4ir::BinOps::Ne, Box::new($e1), Box::new($e2))
         };
     }
     macro_rules! lt {
-        (($e1:expr), ($e2:expr)) => {
+        ($e1:expr, $e2:expr) => {
             Expr::BinOpExpr($crate::p4::p4ir::BinOps::Lt, Box::new($e1), Box::new($e2))
         };
     }
     macro_rules! le {
-        (($e1:expr), ($e2:expr)) => {
+        ($e1:expr, $e2:expr) => {
             Expr::BinOpExpr($crate::p4::p4ir::BinOps::Le, Box::new($e1), Box::new($e2))
         };
     }
     macro_rules! gt {
-        (($e1:expr), ($e2:expr)) => {
+        ($e1:expr, $e2:expr) => {
             Expr::BinOpExpr($crate::p4::p4ir::BinOps::Gt, Box::new($e1), Box::new($e2))
         };
     }
     macro_rules! ge {
-        (($e1:expr), ($e2:expr)) => {
+        ($e1:expr, $e2:expr) => {
             Expr::BinOpExpr($crate::p4::p4ir::BinOps::Ge, Box::new($e1), Box::new($e2))
         };
     }
