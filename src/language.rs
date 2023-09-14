@@ -40,8 +40,8 @@ pub mod ir {
             "+" = Add([Id; 2]),
             "-" = Sub([Id; 2]),
             "neg" = Neg(Id),
-            "store" = Store([Id; 2]),
-            "load" = Load(Id),
+            "write" = Write([Id; 2]),
+            "read" = Read([Id; 2]),
             // Comparators
             "=" = Eq([Id; 2]),
             "<" = Lt([Id; 2]),
@@ -504,7 +504,7 @@ pub mod ir {
                         elaboration: HashSet::new(),
                     }
                 }
-                Mio::Store([field, value]) | Mio::MapsTo([field, value]) => {
+                Mio::Write([field, value]) | Mio::MapsTo([field, value]) => {
                     let reads = egraph[*value].data.max_read.clone();
                     let writes = HashSet::from([*field]);
                     let ty = egraph.analysis.type_unification(
@@ -751,7 +751,7 @@ pub mod ir {
                         elaboration: HashSet::new(),
                     }
                 }
-                Mio::Load(field) => MioAnalysisData {
+                Mio::Read([field, _]) => MioAnalysisData {
                     max_read: HashSet::from([field.clone()]),
                     max_write: HashSet::new(),
                     local_reads: HashMap::from([(enode.clone(), HashSet::from([field.clone()]))]),
@@ -801,6 +801,8 @@ pub mod utils {
     use std::collections::{HashMap, HashSet};
 
     use egg::{Id, RecExpr};
+
+    use crate::utils::RegionedMap;
 
     use super::{
         ir::{Constant, Mio, MioAnalysis},
@@ -902,7 +904,7 @@ pub mod utils {
     }
 
     pub fn interp_recexpr(expr: &RecExpr<Mio>, ctx: &HashMap<String, Mio>) -> Mio {
-        interp_rec(0, expr, ctx)
+        interp_rec(expr.as_ref().len() - 1, expr, ctx)
     }
 }
 
@@ -974,6 +976,21 @@ pub mod transforms {
                 } else {
                     panic!("Assigning to non-variable");
                 }
+            }
+            Stmt::Read(x, y) => {
+                // let val = built.get(x).unwrap();
+                let lhs = egraph.add(Mio::Symbol(x.clone()));
+                let rhs = egraph.add(Mio::Symbol(y.clone()));
+                egraph.add(Mio::Read([lhs, rhs]));
+                let mut c = built;
+                c.insert(y.clone(), (condition.clone(), rhs));
+                c
+            }
+            Stmt::Write(x, y) => {
+                let lhs = egraph.add(Mio::Symbol(x.clone()));
+                let rhs = insert_expr(y, &built, egraph);
+                egraph.add(Mio::Write([lhs, rhs]));
+                built
             }
             Stmt::If(cond, ib, eb) => {
                 let mut current = built.clone();
@@ -1079,17 +1096,16 @@ mod test {
         let (egraph, built) = stmt_to_egraph(&stmts);
         // egraph.dot().to_pdf("stmt_to_egraph.pdf").unwrap();
         println!("Stmt:\n{:?}", stmts);
-        let mut ctx = ctx.clone();
-        interp(&stmts, &mut ctx);
+        let mut p4ctx = ctx.clone();
+        interp(&stmts, &mut p4ctx);
         for (v, val) in built.iter() {
             let expr = extract_unit(&egraph, val.1);
-            // println!("{}: {}", v, expr.pretty(80));
             let result = interp_recexpr(&expr, &ctx);
             let default = &Mio::Symbol(v.clone());
-            let stmt_eval = ctx.get(v).unwrap_or(default);
+            let stmt_eval = p4ctx.get(v).unwrap_or(default);
             println!(
                 "Stmt eval: {:?}",
-                ctx.get(v).unwrap_or(&Mio::Symbol(v.clone()))
+                p4ctx.get(v).unwrap_or(&Mio::Symbol(v.clone()))
             );
             println!("Mio eval: {:?}", result);
             assert_eq!(stmt_eval, &result);

@@ -16,6 +16,16 @@ where
     map: HashMap<K, V>,
 }
 
+impl<K: PartialEq + Eq + Hash, V: Clone, const N: usize> From<[(K, V); N]> for RegionedMap<K, V> {
+    fn from(arr: [(K, V); N]) -> Self {
+        let mut map = HashMap::new();
+        for (k, v) in arr.into_iter() {
+            map.insert(k, v);
+        }
+        Self { parent: None, map }
+    }
+}
+
 impl<K: PartialEq + Eq + Hash, V: Clone> Default for RegionedMap<K, V> {
     fn default() -> Self {
         Self {
@@ -74,5 +84,9 @@ impl<K: PartialEq + Eq + Hash, V: Clone> RegionedMap<K, V> {
 
     pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
         return self.map.iter();
+    }
+
+    pub fn parent(&self) -> Option<Rc<RegionedMap<K, V>>> {
+        self.parent.clone()
     }
 }

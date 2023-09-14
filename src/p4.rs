@@ -1,11 +1,14 @@
 pub mod p4ir {
-    use std::collections::HashMap;
+    use std::{collections::HashMap, rc::Rc};
 
     use egg::{Id, RecExpr};
 
-    use crate::language::{
-        ir::{Constant, Mio},
-        utils::interp_recexpr,
+    use crate::{
+        language::{
+            ir::{Constant, Mio},
+            utils::interp_recexpr,
+        },
+        utils::RegionedMap,
     };
 
     #[derive(Debug, Clone)]
@@ -110,6 +113,8 @@ pub mod p4ir {
         Assign(Expr, Expr),
         If(Expr, Box<Stmt>, Box<Stmt>),
         Block(Vec<Stmt>),
+        Read(String, String),
+        Write(String, Expr),
     }
 
     pub fn interp(stmt: &Stmt, ctx: &mut HashMap<String, Mio>) {
@@ -138,6 +143,18 @@ pub mod p4ir {
                 } else {
                     panic!("LHS of assignment is not a variable");
                 }
+            }
+            Stmt::Read(from, to) => {
+                if ctx.contains_key(from) {
+                    let val = ctx.get(from).unwrap().clone();
+                    ctx.insert(to.clone(), val);
+                } else {
+                    panic!("Variable {} not found", from);
+                }
+            }
+            Stmt::Write(gvar, expr) => {
+                let value = interp_recexpr(&Expr::to_recexpr(expr), ctx);
+                ctx.insert(gvar.clone(), value);
             }
         }
     }
