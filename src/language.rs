@@ -9,21 +9,21 @@ pub mod ir {
         str::FromStr,
     };
 
-    use egg::{define_language, Analysis, Id};
+    use egg::{define_language, Analysis, DidMerge, Id};
 
     define_language! {
         pub enum Mio {
             "ite" = Ite([Id; 3]),
-            "table" = Table([Id; 3]),
+            // (GIte (keys k1 k2 k3...) (actions a1 a2 a3 ... default))
+            "gite" = GIte([Id; 2]),
             "keys" = Keys(Vec<Id>),
             "actions" = Actions(Vec<Id>),
-            "mapsto" = MapsTo([Id; 2]),
-            // lists
-            "append" = Append([Id; 2]),
-            "list" = List(Vec<Id>),
-            // putting tables in the same stage;
+            // putting tables in the same stage; equivalent to T1 || T2
             // (join ?t1 ?t2)
             "join" = Join([Id; 2]),
+            // Stage barrier; (seq ?t1 ?t2) denotes
+            // putting t2 after the stage of t1
+            "seq" = Seq([Id; 2]),
             // Logical operators
             "land" = LAnd([Id; 2]),
             "lor" = LOr([Id; 2]),
@@ -50,7 +50,7 @@ pub mod ir {
             ">=" = Ge([Id; 2]),
             "!=" = Neq([Id; 2]),
             "global" = Global(Id),
-            "default" = DefaultTable,
+            "noop" = NoOp,
             Constant(Constant),
             Symbol(String),
         }
@@ -60,6 +60,7 @@ pub mod ir {
     pub enum MioType {
         Bool,
         Int,
+        BitInt(usize),
         Table(Vec<usize>),
         List(Box<MioType>, usize),
         ActionList(usize),
@@ -67,10 +68,30 @@ pub mod ir {
         // Meta(i32),
     }
 
-    #[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Eq, Hash)]
+    impl Default for MioType {
+        fn default() -> Self {
+            MioType::Unknown
+        }
+    }
+
+    #[derive(Debug, Clone, PartialOrd, Ord, Eq, Hash)]
     pub enum Constant {
         Int(i32),
+        BitInt(i32, usize),
         Bool(bool),
+    }
+
+    impl PartialEq for Constant {
+        fn eq(&self, other: &Self) -> bool {
+            match (self, other) {
+                (Constant::Int(_), Constant::BitInt(_, _)) => other == self,
+                (Constant::Int(a), Constant::Int(b)) => a == b,
+                (Constant::Bool(a), Constant::Bool(b)) => a == b,
+                (Constant::BitInt(a, _), Constant::BitInt(b, _)) => a == b,
+                (Constant::BitInt(a, _), Constant::Int(b)) => a == b,
+                _ => false,
+            }
+        }
     }
 
     impl Display for Constant {
@@ -78,6 +99,7 @@ pub mod ir {
             match self {
                 Constant::Int(i) => write!(f, "{}", i),
                 Constant::Bool(b) => write!(f, "{}", b),
+                Constant::BitInt(i, len) => write!(f, "{}[{}]", i, len),
             }
         }
     }
@@ -112,8 +134,13 @@ pub mod ir {
         type Output = Constant;
 
         fn add(self, rhs: Constant) -> Self::Output {
-            match (self, rhs) {
+            match (&self, &rhs) {
+                (Constant::Int(_a), Constant::BitInt(_, _)) => rhs + self,
                 (Constant::Int(a), Constant::Int(b)) => Constant::Int(a + b),
+                (Constant::BitInt(a, s_a), Constant::BitInt(b, s_b)) => {
+                    Constant::BitInt(a + b, *s_a.max(s_b))
+                }
+                (Constant::BitInt(a, s_a), Constant::Int(b)) => Constant::BitInt(a + b, *s_a),
                 _ => panic!("Addition of non-integers"),
             }
         }
@@ -123,9 +150,26 @@ pub mod ir {
         type Output = Constant;
 
         fn sub(self, rhs: Constant) -> Self::Output {
-            match (self, rhs) {
+            match (&self, &rhs) {
+                (Constant::Int(_a), Constant::BitInt(_, _)) => (-rhs) - (-self),
                 (Constant::Int(a), Constant::Int(b)) => Constant::Int(a - b),
+                (Constant::BitInt(a, s_a), Constant::BitInt(b, s_b)) => {
+                    Constant::BitInt(a - b, *s_a.max(s_b))
+                }
+                (Constant::BitInt(a, s_a), Constant::Int(b)) => Constant::BitInt(a - b, *s_a),
                 _ => panic!("Subtraction of non-integers"),
+            }
+        }
+    }
+
+    impl std::ops::Neg for Constant {
+        type Output = Constant;
+
+        fn neg(self) -> Self::Output {
+            match self {
+                Constant::Int(a) => Constant::Int(-a),
+                Constant::BitInt(a, s) => Constant::BitInt(-a, s),
+                _ => panic!("Negation of non-integers"),
             }
         }
     }
@@ -134,8 +178,13 @@ pub mod ir {
         type Output = Constant;
 
         fn bitand(self, rhs: Constant) -> Self::Output {
-            match (self, rhs) {
+            match (&self, &rhs) {
+                (Constant::Int(_a), Constant::BitInt(_, _)) => rhs & self,
                 (Constant::Int(a), Constant::Int(b)) => Constant::Int(a & b),
+                (Constant::BitInt(a, s_a), Constant::BitInt(b, s_b)) => {
+                    Constant::BitInt(a & b, *s_a.max(s_b))
+                }
+                (Constant::BitInt(a, s_a), Constant::Int(b)) => Constant::BitInt(a & b, *s_a),
                 _ => panic!("Bitwise and of non-integers"),
             }
         }
@@ -145,8 +194,13 @@ pub mod ir {
         type Output = Constant;
 
         fn bitor(self, rhs: Constant) -> Self::Output {
-            match (self, rhs) {
+            match (&self, &rhs) {
+                (Constant::Int(_a), Constant::BitInt(_, _)) => rhs | self,
                 (Constant::Int(a), Constant::Int(b)) => Constant::Int(a | b),
+                (Constant::BitInt(a, s_a), Constant::BitInt(b, s_b)) => {
+                    Constant::BitInt(a | b, *s_a.max(s_b))
+                }
+                (Constant::BitInt(a, s_a), Constant::Int(b)) => Constant::BitInt(a | b, *s_a),
                 _ => panic!("Bitwise or of non-integers"),
             }
         }
@@ -156,8 +210,13 @@ pub mod ir {
         type Output = Constant;
 
         fn bitxor(self, rhs: Constant) -> Self::Output {
-            match (self, rhs) {
+            match (&self, &rhs) {
+                (Constant::Int(_a), Constant::BitInt(_, _)) => rhs ^ self,
                 (Constant::Int(a), Constant::Int(b)) => Constant::Int(a ^ b),
+                (Constant::BitInt(a, s_a), Constant::BitInt(b, s_b)) => {
+                    Constant::BitInt(a ^ b, *s_a.max(s_b))
+                }
+                (Constant::BitInt(a, s_a), Constant::Int(b)) => Constant::BitInt(a ^ b, *s_a),
                 _ => panic!("Bitwise xor of non-integers"),
             }
         }
@@ -169,6 +228,7 @@ pub mod ir {
         fn shl(self, rhs: Constant) -> Self::Output {
             match (self, rhs) {
                 (Constant::Int(a), Constant::Int(b)) => Constant::Int(a << b),
+                (Constant::BitInt(a, s), Constant::Int(b)) => Constant::BitInt(a << b, s),
                 _ => panic!("Bitwise shift left of non-integers"),
             }
         }
@@ -180,6 +240,7 @@ pub mod ir {
         fn shr(self, rhs: Constant) -> Self::Output {
             match (self, rhs) {
                 (Constant::Int(a), Constant::Int(b)) => Constant::Int(a >> b),
+                (Constant::BitInt(a, s), Constant::Int(b)) => Constant::BitInt(a >> b, s),
                 _ => panic!("Bitwise shift right of non-integers"),
             }
         }
@@ -192,6 +253,7 @@ pub mod ir {
             match self {
                 Constant::Int(a) => Constant::Int(!a),
                 Constant::Bool(b) => Constant::Bool(!b),
+                Constant::BitInt(a, s) => Constant::BitInt(!a, s),
             }
         }
     }
@@ -234,13 +296,18 @@ pub mod ir {
             }
         }
 
-        pub fn type_unification(&self, lhs_ty: &MioType, rhs_ty: &MioType) -> MioType {
+        pub fn type_unification(lhs_ty: &MioType, rhs_ty: &MioType) -> MioType {
             match (lhs_ty, rhs_ty) {
                 (MioType::Bool, MioType::Bool) => MioType::Bool,
-                (MioType::Int, MioType::Int) => MioType::Int,
+                (MioType::BitInt(len_l), MioType::BitInt(len_r)) => {
+                    MioType::BitInt(*len_l.max(len_r))
+                }
+                (MioType::Int, MioType::BitInt(_))
+                | (MioType::BitInt(_), MioType::Int)
+                | (MioType::Int, MioType::Int) => MioType::Int,
                 (MioType::List(t1, len_l), MioType::List(t2, len_r)) => {
                     assert_eq!(len_l, len_r);
-                    MioType::List(Box::new(self.type_unification(t1, t2)), *len_l)
+                    MioType::List(Box::new(Self::type_unification(t1, t2)), *len_l)
                 }
                 (MioType::ActionList(len_l), MioType::ActionList(len_r)) => {
                     assert_eq!(len_l, len_r);
@@ -299,32 +366,84 @@ pub mod ir {
                 _ => panic!("eval_binop called with non-binary operator"),
             })
         }
+
+        pub fn new_action_data(
+            reads: HashSet<Id>,
+            writes: HashSet<Id>,
+            checked_type: MioType,
+            constant: Option<Constant>,
+            elaborations: HashSet<Id>,
+        ) -> MioAnalysisData {
+            MioAnalysisData::Action(ActionAnalysis {
+                reads,
+                writes,
+                constant,
+                elaborations,
+                checked_type,
+            })
+        }
+
+        pub fn new_dataflow_data(reads: HashSet<Id>, writes: HashSet<Id>) -> MioAnalysisData {
+            MioAnalysisData::Dataflow(RWAnalysis { reads, writes })
+        }
+
+        pub fn get_constant(egraph: &egg::EGraph<Mio, Self>, id: Id) -> Option<Constant> {
+            match &egraph[id].data {
+                MioAnalysisData::Action(u) => u.constant.clone(),
+                _ => panic!("Dataflow {:?} has no constant", id),
+            }
+        }
+
+        pub fn get_type(egraph: &egg::EGraph<Mio, Self>, id: Id) -> MioType {
+            match &egraph[id].data {
+                MioAnalysisData::Action(u) => u.checked_type.clone(),
+                _ => panic!("Dataflow {:?} has no type", id),
+            }
+        }
+
+        pub fn read_set<'a>(egraph: &'a egg::EGraph<Mio, Self>, id: Id) -> &'a HashSet<Id> {
+            match &egraph[id].data {
+                MioAnalysisData::Action(u) => &u.reads,
+                MioAnalysisData::Dataflow(d) => &d.reads,
+            }
+        }
+
+        pub fn write_set<'a>(egraph: &'a egg::EGraph<Mio, Self>, id: Id) -> &'a HashSet<Id> {
+            match &egraph[id].data {
+                MioAnalysisData::Action(u) => &u.writes,
+                MioAnalysisData::Dataflow(d) => &d.writes,
+            }
+        }
+
+        pub fn elaborations<'a>(egraph: &'a egg::EGraph<Mio, Self>, id: Id) -> &'a HashSet<Id> {
+            match &egraph[id].data {
+                MioAnalysisData::Action(u) => &u.elaborations,
+                _ => panic!("Dataflow {:?} has no elaborations", id),
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Default)]
+    pub struct RWAnalysis {
+        // For checking whether dataflow is preserved
+        // by rewrites; used for Control nodes and tables
+        pub reads: HashSet<Id>,
+        pub writes: HashSet<Id>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Default)]
+    pub struct ActionAnalysis {
+        pub reads: HashSet<Id>,
+        pub writes: HashSet<Id>,
+        pub checked_type: MioType,
+        pub constant: Option<Constant>,
+        pub elaborations: HashSet<Id>,
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
-    pub struct MioAnalysisData {
-        pub local_reads: HashMap<Mio, HashSet<Id>>,
-        pub local_writes: HashMap<Mio, HashSet<Id>>,
-        pub max_read: HashSet<Id>,
-        pub max_write: HashSet<Id>,
-        pub constant: Option<Constant>,
-        pub checked_type: MioType,
-        pub elaboration: HashSet<String>,
-    }
-
-    impl Default for MioAnalysisData {
-        fn default() -> Self {
-            let x = 1;
-            MioAnalysisData {
-                local_reads: HashMap::new(),
-                local_writes: HashMap::new(),
-                max_read: HashSet::new(),
-                max_write: HashSet::new(),
-                constant: None,
-                checked_type: MioType::Unknown,
-                elaboration: HashSet::new(),
-            }
-        }
+    pub enum MioAnalysisData {
+        Dataflow(RWAnalysis),
+        Action(ActionAnalysis),
     }
 
     impl Analysis<Mio> for MioAnalysis {
@@ -333,331 +452,209 @@ pub mod ir {
         fn modify(egraph: &mut egg::EGraph<Mio, Self>, id: Id) {
             // when there are constants, we can add a new node to the e-class
             // with the constant value
-            if let Some(constant) = egraph[id].data.constant.clone() {
-                let new_id = egraph.add(Mio::Constant(constant));
+            if let MioAnalysisData::Action(ActionAnalysis {
+                constant: Some(constant),
+                ..
+            }) = &egraph[id].data
+            {
+                let new_id = egraph.add(Mio::Constant(constant.clone()));
                 egraph.union(id, new_id);
             }
         }
 
         fn merge(&mut self, a: &mut Self::Data, b: Self::Data) -> egg::DidMerge {
-            let max_read = a.max_read.union(&b.max_read).cloned().collect();
-            let max_write = a.max_write.union(&b.max_write).cloned().collect();
-            let local_reads = a
-                .local_reads
-                .iter()
-                .chain(b.local_reads.iter())
-                .map(|(k, v)| {
-                    let mut v = v.clone();
-                    v.extend(b.local_reads.get(k).unwrap_or(&HashSet::new()).clone());
-                    (k.clone(), v)
-                })
-                .collect();
-            let local_writes = a
-                .local_writes
-                .iter()
-                .chain(b.local_writes.iter())
-                .map(|(k, v)| {
-                    let mut v = v.clone();
-                    v.extend(b.local_writes.get(k).unwrap_or(&HashSet::new()).clone());
-                    (k.clone(), v)
-                })
-                .collect();
-            let ty = self.type_unification(&a.checked_type, &b.checked_type);
-            // println!("Unify {:?} {:?} to {:?}", a.checked_type, b.checked_type, ty);
-            let new = MioAnalysisData {
-                max_read,
-                max_write,
-                local_reads,
-                local_writes,
-                constant: a.constant.clone().or(b.constant.clone()),
-                checked_type: ty,
-                elaboration: a.elaboration.union(&b.elaboration).cloned().collect(),
-            };
-            return egg::DidMerge(new != *a, new != b);
+            if let (MioAnalysisData::Dataflow(lhs), MioAnalysisData::Dataflow(rhs)) = (&a, &b) {
+                assert_eq!(lhs.reads, rhs.reads);
+                assert_eq!(lhs.writes, rhs.writes);
+                return DidMerge(false, false);
+            }
+            if let (MioAnalysisData::Action(lhs), MioAnalysisData::Dataflow(rhs)) = (&a, &b) {
+                assert_eq!(lhs.reads, rhs.reads);
+                assert_eq!(lhs.writes, rhs.writes);
+                return DidMerge(false, false);
+            }
+            if let (MioAnalysisData::Dataflow(lhs), MioAnalysisData::Action(rhs)) = (&a, &b) {
+                assert_eq!(lhs.reads, rhs.reads);
+                assert_eq!(lhs.writes, rhs.writes);
+                *a = b;
+                return DidMerge(true, false);
+            }
+            if let (MioAnalysisData::Action(u1), MioAnalysisData::Action(u2)) = (&a, &b) {
+                let ty = Self::type_unification(&u1.checked_type, &u2.checked_type);
+                let merged = MioAnalysis::new_action_data(
+                    u1.reads.union(&u2.reads).cloned().collect(),
+                    u1.writes.union(&u2.writes).cloned().collect(),
+                    ty,
+                    u1.constant.clone().or(u2.constant.clone()),
+                    u1.elaborations.union(&u2.elaborations).cloned().collect(),
+                );
+                let a_merged = merged != *a;
+                let b_merged = merged != b;
+                *a = merged;
+                return DidMerge(a_merged, b_merged);
+            }
+            panic!("Cannot merge {:?} and {:?}", a, b);
         }
 
         fn make(egraph: &egg::EGraph<Mio, Self>, enode: &Mio) -> Self::Data {
             match enode {
-                Mio::DefaultTable => MioAnalysisData {
-                    max_read: HashSet::new(),
-                    max_write: HashSet::new(),
-                    local_reads: HashMap::new(),
-                    local_writes: HashMap::new(),
-                    constant: None,
-                    checked_type: MioType::Table(vec![0]),
-                    elaboration: HashSet::new(),
-                },
-                Mio::Global(v) => MioAnalysisData {
-                    max_read: HashSet::new(),
-                    max_write: HashSet::new(),
-                    local_reads: HashMap::new(),
-                    local_writes: HashMap::new(),
-                    constant: None,
-                    checked_type: egraph[*v].data.checked_type.clone(),
-                    elaboration: HashSet::new(),
-                },
+                Mio::NoOp => MioAnalysisData::Dataflow(Default::default()),
+                Mio::Global(v) => {
+                    let v_data = match &egraph[*v].data {
+                        MioAnalysisData::Action(v_data) => v_data,
+                        _ => panic!("Global variable {:?} has no type", v),
+                    };
+                    MioAnalysis::new_action_data(
+                        v_data.reads.clone(),
+                        v_data.writes.clone(),
+                        v_data.checked_type.clone(),
+                        v_data.constant.clone(),
+                        HashSet::from([v.clone()]),
+                    )
+                }
+                // the || operator
                 Mio::Join(tables) => {
-                    let reads = tables
-                        .iter()
-                        .map(|id| egraph[*id].data.max_read.clone())
-                        .reduce(|a, b| a.union(&b).cloned().collect())
-                        .unwrap_or_default();
-                    let writes = tables
-                        .iter()
-                        .map(|id| egraph[*id].data.max_write.clone())
-                        .reduce(|a, b| a.union(&b).cloned().collect())
-                        .unwrap_or_default();
-                    let local_reads = HashMap::from([(enode.clone(), reads.clone())]);
-                    let local_writes = HashMap::from([(enode.clone(), writes.clone())]);
-                    if let (MioType::Table(t1), MioType::Table(t2)) = (
-                        &egraph[tables[0]].data.checked_type,
-                        &egraph[tables[1]].data.checked_type,
-                    ) {
-                        let mut sizes = HashSet::new();
-                        for s1 in t1.iter() {
-                            for s2 in t2.iter() {
-                                sizes.insert(s1 + s2);
-                            }
-                        }
-                        return MioAnalysisData {
-                            max_read: reads,
-                            max_write: writes,
-                            local_reads,
-                            local_writes,
-                            constant: None,
-                            checked_type: MioType::Table(sizes.into_iter().collect()),
-                            elaboration: HashSet::new(),
-                        };
+                    if let [MioAnalysisData::Dataflow(t1), MioAnalysisData::Dataflow(t2)] =
+                        tables.map(|t| &egraph[t].data).as_slice()
+                    {
+                        return MioAnalysisData::Dataflow(RWAnalysis {
+                            reads: t1.reads.union(&t2.reads).cloned().collect(),
+                            writes: t1.writes.union(&t2.writes).cloned().collect(),
+                        });
                     }
                     panic!(
-                        "Join expects two tables, {:?} and {:?} provided",
-                        egraph[tables[0]].data.checked_type, egraph[tables[1]].data.checked_type
+                        "Join expects children to be tables or controls, {:?} and {:?} provided",
+                        egraph[tables[0]].data, egraph[tables[1]].data
                     );
                 }
-                Mio::Append([xs, ys]) => {
-                    let reads = egraph[*xs].data.max_read.clone();
-                    let writes = egraph[*ys].data.max_write.clone();
-                    let local_reads = HashMap::from([(enode.clone(), reads.clone())]);
-                    let local_writes = HashMap::from([(enode.clone(), writes.clone())]);
-                    if let (MioType::List(ty_l, len_l), MioType::List(ty_r, len_r)) = (
-                        &egraph[*xs].data.checked_type,
-                        &egraph[*ys].data.checked_type,
-                    ) {
-                        return MioAnalysisData {
-                            max_read: reads,
-                            max_write: writes,
-                            local_reads,
-                            local_writes,
-                            constant: None,
-                            checked_type: MioType::List(
-                                Box::new(egraph.analysis.type_unification(&ty_l, &ty_r)),
-                                len_l + len_r,
-                            ),
-                            elaboration: HashSet::new(),
-                        };
+                Mio::Seq([t1, t2]) => match (&egraph[*t1].data, &egraph[*t2].data) {
+                    (MioAnalysisData::Dataflow(d1), MioAnalysisData::Dataflow(d2)) => {
+                        let reads = d1.reads.union(&d2.reads).cloned().collect();
+                        let writes = d1.writes.union(&d2.writes).cloned().collect();
+                        MioAnalysis::new_dataflow_data(reads, writes)
                     }
-                    panic!(
-                        "Append expects two lists, {:?} and {:?} provided",
-                        egraph[*xs].data.checked_type, egraph[*ys].data.checked_type
-                    );
-                }
-                Mio::List(params) => {
-                    let mut reads = HashSet::new();
-                    let mut writes = HashSet::new();
-                    for param in params {
-                        reads.extend(egraph[*param].data.max_read.clone());
-                        writes.extend(egraph[*param].data.max_write.clone());
-                    }
-                    let local_reads = HashMap::from([(
-                        enode.clone(),
-                        params
+                    _ => panic!("Seq expects children to be tables/dataflows"),
+                },
+                Mio::Ite([cond, lb, rb]) => {
+                    let cond_type = Self::get_type(egraph, *cond);
+                    Self::type_unification(&cond_type, &MioType::Bool);
+                    let reads = HashSet::from_iter(
+                        Self::read_set(egraph, *cond)
                             .iter()
-                            .map(|id| egraph[*id].data.max_read.clone())
-                            .reduce(|a, b| a.union(&b).cloned().collect())
-                            .unwrap_or_default(),
-                    )]);
-                    let local_writes = HashMap::from([(
-                        enode.clone(),
-                        params
+                            .chain(Self::read_set(egraph, *lb).iter())
+                            .chain(Self::read_set(egraph, *rb).iter())
+                            .cloned(),
+                    );
+                    let writes = HashSet::from_iter(
+                        Self::write_set(egraph, *cond)
                             .iter()
-                            .map(|id| egraph[*id].data.max_write.clone())
-                            .reduce(|a, b| a.union(&b).cloned().collect())
-                            .unwrap_or_default(),
-                    )]);
-                    MioAnalysisData {
-                        max_read: reads,
-                        max_write: writes,
-                        local_reads,
-                        local_writes,
-                        constant: None,
-                        checked_type: MioType::List(
-                            Box::new(
-                                params
-                                    .iter()
-                                    .map(|id| egraph[*id].data.checked_type.clone())
-                                    .reduce(|x, y| egraph.analysis.type_unification(&x, &y))
-                                    // TODO: a proper way is to use the e-class Id for Meta-typevars
-                                    .unwrap_or(MioType::Unknown),
-                            ),
-                            params.len(),
-                        ),
-                        elaboration: HashSet::new(),
-                    }
-                }
-                Mio::Write([field, value]) | Mio::MapsTo([field, value]) => {
-                    let reads = egraph[*value].data.max_read.clone();
-                    let writes = HashSet::from([*field]);
-                    let ty = egraph.analysis.type_unification(
-                        &egraph[*field].data.checked_type,
-                        &egraph[*value].data.checked_type,
+                            .chain(Self::write_set(egraph, *lb).iter())
+                            .chain(Self::write_set(egraph, *rb).iter())
+                            .cloned(),
                     );
-                    MioAnalysisData {
-                        local_reads: HashMap::from([(enode.clone(), reads.clone())]),
-                        local_writes: HashMap::from([(enode.clone(), writes.clone())]),
-                        max_read: reads,
-                        max_write: writes,
-                        constant: egraph[*value].data.constant.clone(),
-                        checked_type: ty,
-                        elaboration: HashSet::new(),
-                    }
-                }
-                Mio::Keys(keys) => {
-                    let reads = keys
-                        .iter()
-                        .map(|id| egraph[*id].data.max_read.clone())
-                        .reduce(|a, b| a.union(&b).cloned().collect())
-                        .unwrap_or_default();
-                    let checked_type = keys
-                        .iter()
-                        .map(|id| egraph[*id].data.checked_type.clone())
-                        .reduce(|x, y| egraph.analysis.type_unification(&x, &y))
-                        .unwrap_or(MioType::Unknown);
-                    if let MioType::Bool = checked_type {
-                        return MioAnalysisData {
-                            max_read: reads.clone(),
-                            max_write: HashSet::new(),
-                            local_reads: HashMap::from([(enode.clone(), reads)]),
-                            local_writes: HashMap::from([(enode.clone(), HashSet::new())]),
-                            constant: None,
-                            checked_type: MioType::List(Box::new(MioType::Bool), keys.len()),
-                            elaboration: HashSet::new(),
-                        };
-                    }
-                    panic!(
-                        "All keys have to be of type Bool, {:?} provided",
-                        checked_type
-                    );
-                }
-                Mio::Actions(actions) => {
-                    let reads = actions
-                        .iter()
-                        .map(|id| egraph[*id].data.max_read.clone())
-                        .reduce(|a, b| a.union(&b).cloned().collect())
-                        .unwrap_or_default();
-                    let writes = actions
-                        .iter()
-                        .map(|id| egraph[*id].data.max_write.clone())
-                        .reduce(|a, b| a.union(&b).cloned().collect())
-                        .unwrap_or_default();
-                    let param_types = actions
-                        .iter()
-                        .map(|id| egraph[*id].data.checked_type.clone())
-                        .collect::<Vec<_>>();
-                    param_types.iter().for_each(|x| match x {
-                        MioType::List(_, _) => (),
-                        _ => panic!("All actions have to be of type List, {:?} provided", x),
-                    });
 
-                    MioAnalysisData {
-                        max_read: reads.clone(),
-                        max_write: writes.clone(),
-                        local_reads: HashMap::from([(enode.clone(), reads)]),
-                        local_writes: HashMap::from([(enode.clone(), writes)]),
-                        constant: None,
-                        checked_type: MioType::ActionList(param_types.len()),
-                        elaboration: HashSet::new(),
-                    }
+                    MioAnalysis::new_action_data(
+                        reads,
+                        writes,
+                        Self::type_unification(
+                            &Self::get_type(egraph, *lb),
+                            &Self::get_type(egraph, *rb),
+                        ),
+                        None,
+                        HashSet::new(),
+                    )
                 }
-                Mio::Table(params) => {
-                    // (table (keys ?p1 ?p2 ... ?pn)
-                    //        (actions
-                    //          (list
-                    //              (mapsto ?f1 ?v1)
-                    //              (mapsto ?f2 ?v2) ...)
-                    //          (list
-                    //              (mapsto ?f3 ?v3) ...) ...)
-                    //        ?parent)
-                    let parent_type = egraph[params[2]].data.checked_type.clone();
-                    if let MioType::Table(_) = parent_type {
-                        let reads = egraph[params[0]].data.max_read.clone();
-                        let writes = egraph[params[1]].data.max_write.clone();
-                        let keys_type = egraph[params[0]].data.checked_type.clone();
-                        let actions_type = egraph[params[1]].data.checked_type.clone();
-                        if let (MioType::List(_, key_len), MioType::ActionList(action_len)) =
-                            (&keys_type, &actions_type)
-                        {
-                            assert_eq!(key_len, action_len, "Keys and actions must have the same length, {:?} and {:?} provided in {:?}", key_len, action_len, enode);
-                            return MioAnalysisData {
-                                max_read: reads.clone(),
-                                max_write: writes.clone(),
-                                local_reads: HashMap::from([(enode.clone(), reads)]),
-                                local_writes: HashMap::from([(enode.clone(), writes)]),
-                                constant: None,
-                                checked_type: MioType::Table(vec![key_len.clone()]),
-                                elaboration: HashSet::new(),
-                            };
-                        }
-                        panic!(
-                            "Keys and actions must be lists, {:?} and {:?} provided in {:?}",
-                            keys_type, actions_type, enode
+                Mio::Write([field, value]) => {
+                    if let (MioAnalysisData::Action(_u), MioAnalysisData::Action(v)) =
+                        (&egraph[*field].data, &egraph[*value].data)
+                    {
+                        let elaboration = HashSet::from([*field]);
+                        return MioAnalysis::new_action_data(
+                            v.reads.clone(),
+                            v.writes.union(&elaboration).cloned().collect(),
+                            v.checked_type.clone(),
+                            v.constant.clone(),
+                            elaboration,
                         );
                     }
-                    panic!(
-                        "The parent of a tables must also be a table, {:?} provided in {:?}",
-                        parent_type, enode
-                    );
+                    panic!("Write operator takes a field and an update");
                 }
-                Mio::Ite([cond, ib, eb]) => {
-                    let max_reads = [cond, ib, eb]
-                        .iter()
-                        .map(|&id| egraph[*id].data.max_read.clone())
-                        .reduce(|a, b| a.union(&b).cloned().collect())
-                        .unwrap_or_default();
-                    let max_writes = [cond, ib, eb]
-                        .iter()
-                        .map(|&id| egraph[*id].data.max_write.clone())
-                        .reduce(|a, b| a.union(&b).cloned().collect())
-                        .unwrap_or_default();
-                    let local_reads = HashMap::from([(enode.clone(), max_reads.clone())]);
-                    let local_writes = HashMap::from([(enode.clone(), max_writes.clone())]);
-                    let _ = egraph
-                        .analysis
-                        .type_unification(&egraph[*cond].data.checked_type, &MioType::Bool);
-                    let ty = egraph.analysis.type_unification(
-                        &egraph[*ib].data.checked_type,
-                        &egraph[*eb].data.checked_type,
-                    );
-                    MioAnalysisData {
-                        max_read: max_reads,
-                        max_write: max_writes,
-                        local_reads,
-                        local_writes,
-                        constant: None,
-                        checked_type: ty,
-                        elaboration: HashSet::new(),
+                Mio::Keys(keys) => MioAnalysis::new_action_data(
+                    keys.iter()
+                        .map(|k| match &egraph[*k].data {
+                            MioAnalysisData::Action(u) => u.reads.clone(),
+                            _ => panic!("Key entries cannot be control nodes"),
+                        })
+                        .reduce(|x, y| x.union(&y).map(|x| *x).collect())
+                        .unwrap_or_default(),
+                    HashSet::new(),
+                    MioType::Unknown,
+                    None,
+                    HashSet::new(),
+                ),
+                Mio::Actions(actions) => {
+                    let mut reads = HashSet::new();
+                    let mut writes = HashSet::new();
+                    let mut elaborations = HashSet::new();
+                    for u in actions.iter().map(|id| &egraph[*id].data) {
+                        match u {
+                            MioAnalysisData::Dataflow(d) => {
+                                panic!("Use control operators to compose applications");
+                            }
+                            MioAnalysisData::Action(u) => {
+                                reads = reads.union(&u.reads).cloned().collect();
+                                writes = writes.union(&u.writes).cloned().collect();
+                                elaborations =
+                                    elaborations.union(&u.elaborations).cloned().collect();
+                            }
+                        }
                     }
+                    MioAnalysis::new_action_data(
+                        reads,
+                        writes,
+                        MioType::Unknown,
+                        None,
+                        elaborations,
+                    )
+                }
+                Mio::GIte(params) => {
+                    let keys_reads = match &egraph[params[0]].data {
+                        MioAnalysisData::Action(u) => {
+                            assert_eq!(u.writes.len(), 0, "Keys should not write to any variable");
+                            u.reads.clone()
+                        }
+                        _ => panic!("Key entries cannot be control nodes"),
+                    };
+                    let (action_reads, action_writes) = match &egraph[params[1]].data {
+                        MioAnalysisData::Action(u) => (u.reads.clone(), u.writes.clone()),
+                        _ => panic!("Action entries cannot be control nodes"),
+                    };
+                    MioAnalysis::new_dataflow_data(
+                        keys_reads.union(&action_reads).cloned().collect(),
+                        action_writes.clone(),
+                    )
                 }
                 Mio::BitNot(x) | Mio::Neg(x) => {
-                    let _ = egraph
-                        .analysis
-                        .type_unification(&egraph[*x].data.checked_type, &MioType::Int);
-                    egraph[*x].data.clone()
+                    let _ = Self::type_unification(&Self::get_type(egraph, *x), &MioType::Int);
+                    let constant = Self::eval_unop(enode, Self::get_constant(egraph, *x));
+                    Self::new_action_data(
+                        Self::read_set(egraph, *x).clone(),
+                        Self::write_set(egraph, *x).clone(),
+                        Self::get_type(egraph, *x),
+                        constant,
+                        HashSet::new(),
+                    )
                 }
                 Mio::LNot(x) => {
-                    let _ = egraph
-                        .analysis
-                        .type_unification(&egraph[*x].data.checked_type, &MioType::Bool);
-                    egraph[*x].data.clone()
+                    let _ = Self::type_unification(&Self::get_type(egraph, *x), &MioType::Bool);
+                    let constant = Self::eval_unop(enode, Self::get_constant(egraph, *x));
+                    Self::new_action_data(
+                        Self::read_set(egraph, *x).clone(),
+                        Self::write_set(egraph, *x).clone(),
+                        Self::get_type(egraph, *x),
+                        constant,
+                        HashSet::new(),
+                    )
                 }
                 Mio::Add([a, b])
                 | Mio::Sub([a, b])
@@ -666,58 +663,67 @@ pub mod ir {
                 | Mio::BitXor([a, b])
                 | Mio::BitShl([a, b])
                 | Mio::BitShr([a, b]) => {
-                    let _ = egraph
-                        .analysis
-                        .type_unification(&egraph[*a].data.checked_type, &MioType::Int);
-                    let _ = egraph
-                        .analysis
-                        .type_unification(&egraph[*b].data.checked_type, &MioType::Int);
-                    let mut reads = egraph[*a].data.max_read.clone();
-                    reads.extend(egraph[*b].data.max_read.clone());
-                    let mut writes = egraph[*a].data.max_write.clone();
-                    writes.extend(egraph[*b].data.max_write.clone());
-                    let local_reads = HashMap::from([(enode.clone(), reads.clone())]);
-                    let local_writes = HashMap::from([(enode.clone(), writes.clone())]);
-                    MioAnalysisData {
-                        max_read: reads,
-                        max_write: writes,
-                        local_reads,
-                        local_writes,
-                        constant: MioAnalysis::eval_binop(
-                            enode,
-                            egraph[*a].data.constant.clone(),
-                            egraph[*b].data.constant.clone(),
-                        ),
-                        checked_type: MioType::Int,
-                        elaboration: HashSet::new(),
-                    }
+                    // Note that for an update, `elaboration` is tracking the output variables
+                    // these are propagated to `writes` to their parents
+                    // However, when handling an e-class here, we only consider `elaboration`
+                    // since computations (without the effects) can be replayed
+                    let a_type = Self::get_type(egraph, *a);
+                    let b_type = Self::get_type(egraph, *b);
+                    let ret_type = Self::type_unification(&a_type, &b_type);
+                    let _ = Self::type_unification(&ret_type, &MioType::Int);
+                    let reads = Self::read_set(egraph, *a)
+                        .union(Self::read_set(egraph, *b))
+                        .cloned()
+                        .collect();
+                    let writes: HashSet<Id> = Self::write_set(egraph, *a)
+                        .union(Self::write_set(egraph, *b))
+                        .cloned()
+                        .collect();
+                    let constant = Self::eval_binop(
+                        enode,
+                        Self::get_constant(egraph, *a),
+                        Self::get_constant(egraph, *b),
+                    );
+                    Self::new_action_data(
+                        reads,
+                        writes
+                            .union(
+                                &Self::elaborations(egraph, *a)
+                                    .union(Self::elaborations(egraph, *b))
+                                    .cloned()
+                                    .collect(),
+                            )
+                            .cloned()
+                            .collect(),
+                        ret_type,
+                        constant,
+                        HashSet::new(),
+                    )
                 }
                 Mio::LAnd([a, b]) | Mio::LOr([a, b]) | Mio::LXor([a, b]) => {
-                    let _ = egraph
-                        .analysis
-                        .type_unification(&egraph[*a].data.checked_type, &MioType::Bool);
-                    let _ = egraph
-                        .analysis
-                        .type_unification(&egraph[*b].data.checked_type, &MioType::Bool);
-                    let mut reads = egraph[*a].data.max_read.clone();
-                    reads.extend(egraph[*b].data.max_read.clone());
-                    let mut writes = egraph[*a].data.max_write.clone();
-                    writes.extend(egraph[*b].data.max_write.clone());
-                    let local_reads = HashMap::from([(enode.clone(), reads.clone())]);
-                    let local_writes = HashMap::from([(enode.clone(), writes.clone())]);
-                    MioAnalysisData {
-                        max_read: reads,
-                        max_write: writes,
-                        local_reads,
-                        local_writes,
-                        constant: MioAnalysis::eval_binop(
-                            enode,
-                            egraph[*a].data.constant.clone(),
-                            egraph[*b].data.constant.clone(),
-                        ),
-                        checked_type: MioType::Bool,
-                        elaboration: HashSet::new(),
-                    }
+                    let a_type = Self::get_type(egraph, *a);
+                    let b_type = Self::get_type(egraph, *b);
+                    let ret_type = Self::type_unification(&a_type, &b_type);
+                    let _ = Self::type_unification(&ret_type, &MioType::Bool);
+                    let reads = Self::read_set(egraph, *a)
+                        .union(Self::read_set(egraph, *b))
+                        .cloned()
+                        .collect();
+                    let writes: HashSet<_> = Self::write_set(egraph, *a)
+                        .union(Self::write_set(egraph, *b))
+                        .cloned()
+                        .collect();
+                    let constant = Self::eval_binop(
+                        enode,
+                        Self::get_constant(egraph, *a),
+                        Self::get_constant(egraph, *b),
+                    );
+                    let elaborations = Self::elaborations(egraph, *a)
+                        .union(Self::elaborations(egraph, *b))
+                        .cloned()
+                        .collect();
+                    let writes = writes.union(&elaborations).cloned().collect();
+                    Self::new_action_data(reads, writes, ret_type, constant, elaborations)
                 }
                 Mio::Eq([a, b])
                 | Mio::Lt([a, b])
@@ -725,63 +731,64 @@ pub mod ir {
                 | Mio::Le([a, b])
                 | Mio::Ge([a, b])
                 | Mio::Neq([a, b]) => {
-                    let _ = egraph
-                        .analysis
-                        .type_unification(&egraph[*a].data.checked_type, &MioType::Int);
-                    let _ = egraph
-                        .analysis
-                        .type_unification(&egraph[*b].data.checked_type, &MioType::Int);
-                    let mut reads = egraph[*a].data.max_read.clone();
-                    reads.extend(egraph[*b].data.max_read.clone());
-                    let mut writes = egraph[*a].data.max_write.clone();
-                    writes.extend(egraph[*b].data.max_write.clone());
-                    let local_reads = HashMap::from([(enode.clone(), reads.clone())]);
-                    let local_writes = HashMap::from([(enode.clone(), writes.clone())]);
-                    MioAnalysisData {
-                        max_read: reads,
-                        max_write: writes,
-                        local_reads,
-                        local_writes,
-                        constant: MioAnalysis::eval_binop(
-                            enode,
-                            egraph[*a].data.constant.clone(),
-                            egraph[*b].data.constant.clone(),
-                        ),
-                        checked_type: MioType::Bool,
-                        elaboration: HashSet::new(),
-                    }
+                    let a_type = Self::get_type(egraph, *a);
+                    let b_type = Self::get_type(egraph, *b);
+                    let ret_type = Self::type_unification(&a_type, &b_type);
+                    let _ = Self::type_unification(&ret_type, &MioType::Int);
+                    let reads = Self::read_set(egraph, *a)
+                        .union(Self::read_set(egraph, *b))
+                        .cloned()
+                        .collect();
+                    let writes: HashSet<_> = Self::write_set(egraph, *a)
+                        .union(Self::write_set(egraph, *b))
+                        .cloned()
+                        .collect();
+                    let constant = Self::eval_binop(
+                        enode,
+                        Self::get_constant(egraph, *a),
+                        Self::get_constant(egraph, *b),
+                    );
+                    Self::new_action_data(
+                        reads,
+                        writes
+                            .union(
+                                &Self::elaborations(egraph, *a)
+                                    .union(Self::elaborations(egraph, *b))
+                                    .cloned()
+                                    .collect(),
+                            )
+                            .cloned()
+                            .collect(),
+                        ret_type,
+                        constant,
+                        HashSet::new(),
+                    )
                 }
-                Mio::Read([field, _]) => MioAnalysisData {
-                    max_read: HashSet::from([field.clone()]),
-                    max_write: HashSet::new(),
-                    local_reads: HashMap::from([(enode.clone(), HashSet::from([field.clone()]))]),
-                    local_writes: HashMap::new(),
-                    constant: None,
-                    checked_type: egraph[*field].data.checked_type.clone(),
-                    elaboration: HashSet::new(),
-                },
+                Mio::Read([field, pre_state]) => Self::new_action_data(
+                    HashSet::from([*field]),
+                    HashSet::from([*pre_state]),
+                    Self::get_type(egraph, *field),
+                    Self::get_constant(egraph, *field),
+                    HashSet::new(),
+                ),
                 Mio::Constant(c) => {
                     let ty = match c {
                         Constant::Bool(_) => MioType::Bool,
                         Constant::Int(_) => MioType::Int,
+                        Constant::BitInt(_, b) => MioType::BitInt(*b),
                     };
-                    MioAnalysisData {
-                        max_read: HashSet::new(),
-                        max_write: HashSet::new(),
-                        local_reads: HashMap::new(),
-                        local_writes: HashMap::new(),
-                        constant: Some(c.clone()),
-                        checked_type: ty,
-                        elaboration: HashSet::new(),
-                    }
+                    Self::new_action_data(
+                        HashSet::new(),
+                        HashSet::new(),
+                        ty,
+                        Some(c.clone()),
+                        HashSet::new(),
+                    )
                 }
-                Mio::Symbol(sym) => MioAnalysisData {
-                    max_read: HashSet::new(),
-                    max_write: HashSet::new(),
-                    local_reads: HashMap::new(),
-                    local_writes: HashMap::new(),
-                    constant: egraph.analysis.context.get(&enode.to_string()).cloned(),
-                    checked_type: if egraph.analysis.gamma.contains_key(sym) {
+                Mio::Symbol(sym) => Self::new_action_data(
+                    HashSet::new(),
+                    HashSet::new(),
+                    if egraph.analysis.gamma.contains_key(sym) {
                         egraph.analysis.gamma[sym].clone()
                     } else {
                         // println!(
@@ -790,8 +797,9 @@ pub mod ir {
                         // );
                         MioType::Unknown
                     },
-                    elaboration: HashSet::new(),
-                },
+                    egraph.analysis.context.get(sym).cloned(),
+                    HashSet::new(),
+                ),
             }
         }
     }
@@ -850,15 +858,29 @@ pub mod utils {
         let current = &expr.as_ref()[rt];
         match current {
             Mio::Ite([cond, lb, rb]) => {
-                if let Mio::Constant(Constant::Bool(b)) = interp_rec(usize::from(*cond), expr, ctx)
-                {
-                    if b {
+                let cond = interp_rec(usize::from(*cond), expr, ctx);
+                if let Mio::Constant(c) = cond {
+                    if c.as_bool().unwrap() {
                         interp_rec(usize::from(*lb), expr, ctx)
                     } else {
                         interp_rec(usize::from(*rb), expr, ctx)
                     }
                 } else {
-                    panic!("Condition of ite must evaluate to a boolean");
+                    panic!("Condition should be a boolean");
+                }
+            }
+            Mio::GIte([keys, actions]) => {
+                let keys = interp_rec(usize::from(*keys), expr, ctx);
+                if let Mio::Keys(_keys) = keys {
+                    if let Mio::Actions(_actions) = interp_rec(usize::from(*actions), expr, ctx) {
+                        // can't really evaluate a table since
+                        // entry values are not known at this time
+                        todo!()
+                    } else {
+                        panic!("Actions expression should be an Actions node");
+                    }
+                } else {
+                    panic!("Keys expression should be a Keys node");
                 }
             }
             Mio::Constant(_) => current.clone(),

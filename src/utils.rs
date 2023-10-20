@@ -2,7 +2,6 @@ use std::{
     cell::{Ref, RefCell},
     collections::HashMap,
     hash::Hash,
-    ops::Deref,
     rc::Rc,
 };
 
