@@ -931,14 +931,14 @@ pub mod utils {
 }
 
 pub mod transforms {
-    use std::{cell::RefCell, collections::HashMap, ops::Deref, rc::Rc};
+    use std::rc::Rc;
 
     use egg::{EGraph, Id};
 
     use crate::{
         p4::{
             self,
-            p4ir::{BinOps, Expr, Stmt, UnOps},
+            p4ir::{Expr, Stmt, UnOps},
         },
         utils::RegionedMap,
     };
