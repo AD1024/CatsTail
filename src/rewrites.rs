@@ -100,7 +100,11 @@ pub fn split_table(n: usize) -> Vec<RW> {
                 if MioAnalysis::write_set(egraph, *a).is_disjoint(&key_reads) {
                     remained.push(index);
                 } else {
-                    split.push(index);
+                    if split.len() == split_bound {
+                        remained.push(index);
+                    } else {
+                        split.push(index);
+                    }
                 }
                 index += 1;
             }
@@ -111,12 +115,9 @@ pub fn split_table(n: usize) -> Vec<RW> {
                 } else {
                     remained.split_off(remained.len() - split_bound)
                 };
-            } else {
-                while split.len() > split_bound {
-                    remained.push(split.pop().unwrap());
-                }
             }
             debug_assert!(split.len() + remained.len() == index);
+            debug_assert!(split.len() <= split_bound);
 
             let actions = egraph[a1s].nodes[0].children().to_vec();
             let remaining_actions = remained.iter().map(|i| actions[*i]).collect::<Vec<_>>();
@@ -125,6 +126,7 @@ pub fn split_table(n: usize) -> Vec<RW> {
             let rhs_action_id = egraph.add(Mio::Actions(split_actions));
             let lhs_table = egraph.add(Mio::GIte([k1s, lhs_action_id]));
             let rhs_table = egraph.add(Mio::GIte([k1s, rhs_action_id]));
+            // (seq (gite ?k1s ?remaining) (gite ?k1s ?split))
             let seq_id = egraph.add(Mio::Seq([lhs_table, rhs_table]));
             egraph.union(eclass, seq_id);
             vec![eclass]
