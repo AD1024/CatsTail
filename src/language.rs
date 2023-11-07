@@ -368,11 +368,11 @@ pub mod ir {
         }
 
         pub fn new_action_data(
-            reads: HashSet<Id>,
-            writes: HashSet<Id>,
+            reads: HashSet<String>,
+            writes: HashSet<String>,
             checked_type: MioType,
             constant: Option<Constant>,
-            elaborations: HashSet<Id>,
+            elaborations: HashSet<String>,
         ) -> MioAnalysisData {
             MioAnalysisData::Action(ActionAnalysis {
                 reads,
@@ -383,7 +383,10 @@ pub mod ir {
             })
         }
 
-        pub fn new_dataflow_data(reads: HashSet<Id>, writes: HashSet<Id>) -> MioAnalysisData {
+        pub fn new_dataflow_data(
+            reads: HashSet<String>,
+            writes: HashSet<String>,
+        ) -> MioAnalysisData {
             MioAnalysisData::Dataflow(RWAnalysis { reads, writes })
         }
 
@@ -401,21 +404,21 @@ pub mod ir {
             }
         }
 
-        pub fn read_set<'a>(egraph: &'a egg::EGraph<Mio, Self>, id: Id) -> &'a HashSet<Id> {
+        pub fn read_set<'a>(egraph: &'a egg::EGraph<Mio, Self>, id: Id) -> &'a HashSet<String> {
             match &egraph[id].data {
                 MioAnalysisData::Action(u) => &u.reads,
                 MioAnalysisData::Dataflow(d) => &d.reads,
             }
         }
 
-        pub fn write_set<'a>(egraph: &'a egg::EGraph<Mio, Self>, id: Id) -> &'a HashSet<Id> {
+        pub fn write_set<'a>(egraph: &'a egg::EGraph<Mio, Self>, id: Id) -> &'a HashSet<String> {
             match &egraph[id].data {
                 MioAnalysisData::Action(u) => &u.writes,
                 MioAnalysisData::Dataflow(d) => &d.writes,
             }
         }
 
-        pub fn elaborations<'a>(egraph: &'a egg::EGraph<Mio, Self>, id: Id) -> &'a HashSet<Id> {
+        pub fn elaborations<'a>(egraph: &'a egg::EGraph<Mio, Self>, id: Id) -> &'a HashSet<String> {
             match &egraph[id].data {
                 MioAnalysisData::Action(u) => &u.elaborations,
                 _ => panic!("Dataflow {:?} has no elaborations", id),
@@ -427,17 +430,17 @@ pub mod ir {
     pub struct RWAnalysis {
         // For checking whether dataflow is preserved
         // by rewrites; used for Control nodes and tables
-        pub reads: HashSet<Id>,
-        pub writes: HashSet<Id>,
+        pub reads: HashSet<String>,
+        pub writes: HashSet<String>,
     }
 
     #[derive(Debug, Clone, PartialEq, Eq, Default)]
     pub struct ActionAnalysis {
-        pub reads: HashSet<Id>,
-        pub writes: HashSet<Id>,
+        pub reads: HashSet<String>,
+        pub writes: HashSet<String>,
         pub checked_type: MioType,
         pub constant: Option<Constant>,
-        pub elaborations: HashSet<Id>,
+        pub elaborations: HashSet<String>,
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -509,7 +512,7 @@ pub mod ir {
                         v_data.writes.clone(),
                         v_data.checked_type.clone(),
                         v_data.constant.clone(),
-                        HashSet::from([v.clone()]),
+                        HashSet::new(),
                     )
                 }
                 // the || operator
@@ -568,7 +571,7 @@ pub mod ir {
                     if let (MioAnalysisData::Action(_u), MioAnalysisData::Action(v)) =
                         (&egraph[*field].data, &egraph[*value].data)
                     {
-                        let elaboration = HashSet::from([*field]);
+                        let elaboration = Self::read_set(egraph, *field).clone();
                         return MioAnalysis::new_action_data(
                             v.reads.clone(),
                             v.writes.union(&elaboration).cloned().collect(),
@@ -585,7 +588,7 @@ pub mod ir {
                             MioAnalysisData::Action(u) => u.reads.clone(),
                             _ => panic!("Key entries cannot be control nodes"),
                         })
-                        .reduce(|x, y| x.union(&y).map(|x| *x).collect())
+                        .reduce(|x, y| x.union(&y).map(|x| x.into()).collect())
                         .unwrap_or_default(),
                     HashSet::new(),
                     MioType::Unknown,
@@ -675,7 +678,7 @@ pub mod ir {
                         .union(Self::read_set(egraph, *b))
                         .cloned()
                         .collect();
-                    let writes: HashSet<Id> = Self::write_set(egraph, *a)
+                    let writes: HashSet<String> = Self::write_set(egraph, *a)
                         .union(Self::write_set(egraph, *b))
                         .cloned()
                         .collect();
@@ -765,8 +768,8 @@ pub mod ir {
                     )
                 }
                 Mio::Read([field, pre_state]) => Self::new_action_data(
-                    HashSet::from([*field]),
-                    HashSet::from([*pre_state]),
+                    Self::read_set(egraph, *field).clone(),
+                    Self::write_set(egraph, *pre_state).clone(),
                     Self::get_type(egraph, *field),
                     Self::get_constant(egraph, *field),
                     HashSet::new(),
@@ -827,10 +830,10 @@ pub mod utils {
     }
 
     pub fn get_dependency(
-        lhs_reads: &HashSet<Id>,
-        lhs_writes: &HashSet<Id>,
-        rhs_reads: &HashSet<Id>,
-        rhs_writes: &HashSet<Id>,
+        lhs_reads: &HashSet<String>,
+        lhs_writes: &HashSet<String>,
+        rhs_reads: &HashSet<String>,
+        rhs_writes: &HashSet<String>,
     ) -> Dependency {
         let mut result = Dependency::INDEPENDENT;
         if lhs_writes.intersection(rhs_writes).count() > 0 {

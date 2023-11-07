@@ -38,50 +38,40 @@ fn is_greater_eq(v1: Var, val: i32) -> impl Fn(&mut EG, Id, &Subst) -> bool {
     }
 }
 
-pub fn parallelize_independent_tables() -> RW {
-    return rewrite!("parallel-indep-tables";
-        "(table ?p2s ?a2s (table ?p1s ?a1s ?cont))"
-            =>
-        "(join (table ?p1s ?a1s ?cont) (table ?p2s ?a2s ?cont))"
-         if independent_actions("?a1s".parse().unwrap(),
-                                "?a2s".parse().unwrap()));
+pub fn parallelize_independent_tables() -> Vec<RW> {
+    return vec![
+        rewrite!(
+            "parallelize-table-adj";
+            "(seq (gite ?k1s ?a1s) (gite ?k2s ?a2s))" =>
+            "(join (gite ?k1s ?a1s) (gite ?k2s ?a2s))"
+            if independent_actions("?a1s".parse().unwrap(), "?a2s".parse().unwrap())
+        ),
+        rewrite!(
+            "parallelize-table-left";
+            "(seq (gite ?k1s ?a1s) (seq (gite ?k2s ?a2s) ?t3))" =>
+            "(seq (join (gite ?k1s ?a1s) (gite ?k2s ?a2s)) ?t3)"
+            if independent_actions("?a1s".parse().unwrap(), "?a2s".parse().unwrap())
+        ),
+    ];
 }
 
-// pub fn list_properties() -> Vec<RW> {
-//     struct AppendEvalApplier(Var, Var);
-//     impl Applier<Mio, MioAnalysis> for AppendEvalApplier {
-//         fn apply_one(
-//             &self,
-//             egraph: &mut EGraph<Mio, MioAnalysis>,
-//             eclass: Id,
-//             subst: &Subst,
-//             searcher_ast: Option<&egg::PatternAst<Mio>>,
-//             rule_name: egg::Symbol,
-//         ) -> Vec<Id> {
-//             let c1 = subst[self.0];
-//             let c2 = subst[self.1];
-//         }
-//     }
-//     vec![
-//         rewrite!("append-eval"; "(append ?xs ?ys)" => { AppendEvalApplier("?xs".parse().unwrap(), "?ys".parse().unwrap()) }),
-//     ]
-// }
+pub fn comm_independent_tables() -> Vec<RW> {
+    return vec![
+        rewrite!("comm-tables-adj";
+            "(seq (gite ?k1s ?a1s) (gite ?k2s ?a2s))" =>
+            "(seq (gite ?k2s ?a2s) (gite ?k1s ?a1s))"
+            if independent_actions("?a1s".parse().unwrap(), "?a2s".parse().unwrap())
+        ),
+        rewrite!("comm-tables-left";
+            "(seq (gite ?k1s ?a1s) (seq (gite ?k2s ?a2s) ?t3))" =>
+            "(seq (gite ?k2s ?a2s) (seq (gite ?k1s ?a1s) ?t3))"
+            if independent_actions("?a1s".parse().unwrap(), "?a2s".parse().unwrap())
+        ),
+    ];
+}
 
-pub fn join_properties() -> Vec<RW> {
-    vec![
-        rewrite!(
-            "join-assoc";
-            "(join ?t1 (join ?t2 ?t3))"
-                =>
-            "(join (join ?t1 ?t2) ?t3)"
-        ),
-        rewrite!(
-            "join-comm";
-            "(join ?t1 ?t2)"
-                =>
-            "(join ?t2 ?t1)"
-        ),
-    ]
+pub fn ite_to_gite() -> RW {
+    rewrite!("ite-to-gite"; "(ite ?c ?t1 ?t2)" => "(gite (keys ?c1) (actions ?t1 ?t2))")
 }
 
 pub fn alg_simpl() -> Vec<RW> {
@@ -114,4 +104,17 @@ pub fn predicate_rewrites() -> Vec<RW> {
         rewrite!("ite-false"; "(ite false ?t1 ?t2)" => "?t2"),
         rewrite!("ite-same"; "(ite ?c ?t ?t)" => "?t"),
     ]
+}
+
+pub mod tofino_alus {
+
+    use super::{rewrite, RW};
+
+    pub fn rel_op_rewrites() -> Vec<RW> {
+        vec![
+            // stateful alus does not support >= or <=, we need to convert these conversions
+            rewrite!("ge-conv"; "(>= ?x ?y)" => "(not (< ?x ?y))"),
+            rewrite!("le-conv"; "(<= ?x ?y)" => "(not (> ?x ?y))"),
+        ]
+    }
 }
