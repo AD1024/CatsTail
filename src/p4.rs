@@ -70,7 +70,6 @@ pub mod p4ir {
                 Self::Neg => Mio::Neg(arg),
                 Self::Not => Mio::LNot(arg),
                 Self::BitNot => Mio::BitNot(arg),
-                _ => panic!("Not implemented"),
             }
         }
     }

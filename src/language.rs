@@ -24,6 +24,11 @@ pub mod ir {
             // Stage barrier; (seq ?t1 ?t2) denotes
             // putting t2 after the stage of t1
             "seq" = Seq([Id; 2]),
+            // (arith-alu ?op ?a ?b ?imm)
+            "arith-alu" = ArithAlu(Vec<Id>),
+            // (rel-alu ?pred ?a ?b ?imm)
+            "rel-alu" = RelAlu(Vec<Id>),
+            "stateful-alu" = SAlu(Vec<Id>),
             // Logical operators
             "land" = LAnd([Id; 2]),
             "lor" = LOr([Id; 2]),
@@ -51,6 +56,8 @@ pub mod ir {
             "!=" = Neq([Id; 2]),
             "global" = Global(Id),
             "noop" = NoOp,
+            ArithAluOps(ArithAluOps),
+            RelAluOps(RelAluOps),
             Constant(Constant),
             Symbol(String),
         }
@@ -71,6 +78,78 @@ pub mod ir {
     impl Default for MioType {
         fn default() -> Self {
             MioType::Unknown
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+    pub enum ArithAluOps {
+        Add,
+        Sub,
+        Max,
+        Min,
+    }
+
+    impl Display for ArithAluOps {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                ArithAluOps::Add => write!(f, "alu-add"),
+                ArithAluOps::Sub => write!(f, "alu-sub"),
+                ArithAluOps::Max => write!(f, "alu-max"),
+                ArithAluOps::Min => write!(f, "alu-min"),
+            }
+        }
+    }
+
+    impl FromStr for ArithAluOps {
+        type Err = ();
+
+        fn from_str(s: &str) -> Result<Self, Self::Err> {
+            match s {
+                "alu-add" => Ok(ArithAluOps::Add),
+                "alu-sub" => Ok(ArithAluOps::Sub),
+                "alu-max" => Ok(ArithAluOps::Max),
+                "alu-min" => Ok(ArithAluOps::Min),
+                _ => Err(()),
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+    pub enum RelAluOps {
+        Eq,
+        Lt,
+        Gt,
+        Le,
+        Ge,
+        Neq,
+    }
+
+    impl Display for RelAluOps {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                RelAluOps::Eq => write!(f, "alu-eq"),
+                RelAluOps::Lt => write!(f, "alu-lt"),
+                RelAluOps::Gt => write!(f, "alu-gt"),
+                RelAluOps::Le => write!(f, "alu-le"),
+                RelAluOps::Ge => write!(f, "alu-ge"),
+                RelAluOps::Neq => write!(f, "alu-neq"),
+            }
+        }
+    }
+
+    impl FromStr for RelAluOps {
+        type Err = ();
+
+        fn from_str(s: &str) -> Result<Self, Self::Err> {
+            match s {
+                "alu-eq" => Ok(RelAluOps::Eq),
+                "alu-lt" => Ok(RelAluOps::Lt),
+                "alu-gt" => Ok(RelAluOps::Gt),
+                "alu-le" => Ok(RelAluOps::Le),
+                "alu-ge" => Ok(RelAluOps::Ge),
+                "alu-neq" => Ok(RelAluOps::Neq),
+                _ => Err(()),
+            }
         }
     }
 
@@ -305,6 +384,10 @@ pub mod ir {
                 (MioType::Int, MioType::BitInt(_))
                 | (MioType::BitInt(_), MioType::Int)
                 | (MioType::Int, MioType::Int) => MioType::Int,
+                (MioType::Int, MioType::Bool)
+                | (MioType::Bool, MioType::Int)
+                | (MioType::BitInt(_), MioType::Bool)
+                | (MioType::Bool, MioType::BitInt(_)) => MioType::Int,
                 (MioType::List(t1, len_l), MioType::List(t2, len_r)) => {
                     assert_eq!(len_l, len_r);
                     MioType::List(Box::new(Self::type_unification(t1, t2)), *len_l)
@@ -408,6 +491,7 @@ pub mod ir {
             match &egraph[id].data {
                 MioAnalysisData::Action(u) => &u.reads,
                 MioAnalysisData::Dataflow(d) => &d.reads,
+                _ => panic!("Empty Analysis @ {}", id),
             }
         }
 
@@ -415,6 +499,7 @@ pub mod ir {
             match &egraph[id].data {
                 MioAnalysisData::Action(u) => &u.writes,
                 MioAnalysisData::Dataflow(d) => &d.writes,
+                _ => panic!("Empty Analysis @ {}", id),
             }
         }
 
@@ -447,6 +532,7 @@ pub mod ir {
     pub enum MioAnalysisData {
         Dataflow(RWAnalysis),
         Action(ActionAnalysis),
+        Empty,
     }
 
     impl Analysis<Mio> for MioAnalysis {
@@ -466,6 +552,13 @@ pub mod ir {
         }
 
         fn merge(&mut self, a: &mut Self::Data, b: Self::Data) -> egg::DidMerge {
+            if let MioAnalysisData::Empty = b {
+                return DidMerge(false, false);
+            }
+            if let MioAnalysisData::Empty = a {
+                *a = b;
+                return DidMerge(true, false);
+            }
             if let (MioAnalysisData::Dataflow(lhs), MioAnalysisData::Dataflow(rhs)) = (&a, &b) {
                 assert_eq!(lhs.reads, rhs.reads);
                 assert_eq!(lhs.writes, rhs.writes);
@@ -601,14 +694,14 @@ pub mod ir {
                     let mut elaborations = HashSet::new();
                     for u in actions.iter().map(|id| &egraph[*id].data) {
                         match u {
-                            MioAnalysisData::Dataflow(d) => {
-                                panic!("Use control operators to compose applications");
-                            }
                             MioAnalysisData::Action(u) => {
                                 reads = reads.union(&u.reads).cloned().collect();
                                 writes = writes.union(&u.writes).cloned().collect();
                                 elaborations =
                                     elaborations.union(&u.elaborations).cloned().collect();
+                            }
+                            _ => {
+                                panic!("Use control operators to compose applications");
                             }
                         }
                     }
@@ -767,6 +860,14 @@ pub mod ir {
                         HashSet::new(),
                     )
                 }
+                // Safe to return empty data
+                // these will be populated by rewrite rules
+                // where read/write analysis has been done
+                Mio::ArithAluOps(_)
+                | Mio::SAlu(_)
+                | Mio::ArithAlu(_)
+                | Mio::RelAluOps(_)
+                | Mio::RelAlu(_) => MioAnalysisData::Empty,
                 Mio::Read([field, pre_state]) => Self::new_action_data(
                     Self::read_set(egraph, *field).clone(),
                     Self::write_set(egraph, *pre_state).clone(),
