@@ -146,15 +146,35 @@ pub mod p4ir {
             Stmt::Read(from, to) => {
                 if ctx.contains_key(from) {
                     let val = ctx.get(from).unwrap().clone();
-                    ctx.insert(to.clone(), val);
                 } else {
-                    panic!("Variable {} not found", from);
+                    ctx.insert(to.clone(), Mio::Constant(Constant::Int(0)));
                 }
             }
             Stmt::Write(gvar, expr) => {
                 let value = interp_recexpr(&Expr::to_recexpr(expr), ctx);
                 ctx.insert(gvar.clone(), value);
             }
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct Table {
+        pub name: String,
+        pub keys: Vec<String>,
+        pub actions: HashMap<String, Stmt>,
+    }
+
+    impl Table {
+        pub fn new(name: String, keys: Vec<String>) -> Self {
+            Self {
+                name,
+                keys,
+                actions: HashMap::new(),
+            }
+        }
+
+        pub fn add_action(&mut self, name: String, action: Stmt) {
+            self.actions.insert(name, action);
         }
     }
 }
@@ -299,8 +319,49 @@ pub mod macros {
         };
     }
 
+    macro_rules! p4_read {
+        ($x:expr, $y:expr) => {
+            Stmt::Read($x.to_string(), $y.to_string())
+        };
+    }
+
+    macro_rules! p4_write {
+        ($x:expr, $y:expr) => {
+            Stmt::Write($x.to_string(), $y)
+        };
+    }
+
     pub(crate) use {
         add, and, assign, bitand, bitnot, bitor, bitxor, block, div, eq, ge, gt, ite, le, lt, mul,
-        ne, neg, not, or, shl, shr, sub, var, xor,
+        ne, neg, not, or, p4_read, p4_write, shl, shr, sub, var, xor,
     };
+}
+
+pub mod example_progs {
+    use super::{
+        macros::{add, assign, block, ite, lt, p4_read, p4_write, var},
+        p4ir::{Expr, Stmt, Table},
+    };
+
+    pub fn rcp() -> Table {
+        let set_pkt = block!(
+            p4_read!("input_traffic_bytes_tmp", "input_traffic_bytes"),
+            p4_read!("sum_rtt_tmp", "sum_rtt"),
+            p4_read!("num_pkts_tmp", "num_pkts"),
+            ite!(
+                lt!(var!("meta.rtt"), Expr::Int(30)),
+                block!(
+                    assign!("sum_rtt_tmp" => add!(var!("sum_rtt_tmp"), var!("meta.rtt"))),
+                    assign!("num_pkts_tmp" => add!(var!("num_pkts_tmp"), Expr::Int(1)))
+                ),
+                block!()
+            ),
+            p4_write!("input_traffic_bytes", var!("input_traffic_bytes_tmp")),
+            p4_write!("sum_rtt", var!("sum_rtt_tmp")),
+            p4_write!("num_pkts", var!("num_pkts_tmp"))
+        );
+        let mut table = Table::new("rcp_table".to_string(), vec!["meta.rcp_key".to_string()]);
+        table.add_action("set_pkt".into(), set_pkt);
+        return table;
+    }
 }

@@ -2,18 +2,24 @@ use egg::{rewrite, Applier, EGraph, Id, Language, Pattern, Rewrite, Subst, Var};
 
 use crate::language::{
     self,
-    ir::{Constant, Mio, MioAnalysis},
+    ir::{Constant, Mio, MioAnalysis, MioAnalysisData},
     utils::{get_dependency, Dependency},
 };
 
 type RW = Rewrite<language::ir::Mio, language::ir::MioAnalysis>;
 type EG = EGraph<Mio, MioAnalysis>;
 
-// pub fn waw_elim() -> RW {
-//     // WAW elimination is done by
-//     // 1. merge matching keys
-//     // 2. merge actions
-// }
+fn constains_leaf(v: Var) -> impl Fn(&mut EG, Id, &Subst) -> bool {
+    move |egraph, _id, subst| {
+        let eclass = subst[v];
+        for node in egraph[eclass].nodes.iter() {
+            if node.is_leaf() {
+                return true;
+            }
+        }
+        return false;
+    }
+}
 
 fn independent_actions(a1s: Var, a2s: Var) -> impl Fn(&mut EG, Id, &Subst) -> bool {
     move |egraph, _id, subst| {
@@ -40,7 +46,7 @@ fn is_greater_eq(v1: Var, val: i32) -> impl Fn(&mut EG, Id, &Subst) -> bool {
 
 pub fn seq_elim() -> Vec<RW> {
     // work together with table splitting
-    return vec![rewrite!("seq-elim-l";
+    return vec![rewrite!("seq-normalization";
             "(seq (seq ?t1 ?t2) ?t3)" => "(seq ?t1 (seq ?t2 ?t3))")];
 }
 
@@ -129,6 +135,7 @@ pub fn split_table(n: usize) -> Vec<RW> {
             // (seq (gite ?k1s ?remaining) (gite ?k1s ?split))
             let seq_id = egraph.add(Mio::Seq([lhs_table, rhs_table]));
             egraph.union(eclass, seq_id);
+            // TODO: propagate elaboration
             vec![eclass]
         }
     }
@@ -174,14 +181,23 @@ pub fn predicate_rewrites() -> Vec<RW> {
 
 pub mod tofino_alus {
 
-    use super::{rewrite, RW};
+    use egg::{Id, Subst};
 
-    pub fn rel_op_rewrites() -> Vec<RW> {
-        vec![
-            // stateful alus does not support >= or <=, we need to convert these conversions
-            rewrite!("ge-conv"; "(>= ?x ?y)" => "(not (< ?x ?y))"),
-            rewrite!("le-conv"; "(<= ?x ?y)" => "(not (> ?x ?y))"),
-        ]
+    use crate::language::ir::Mio;
+
+    use super::{constains_leaf, rewrite, Var, EG, RW};
+
+    fn is_mapped(v: Var) -> impl Fn(&mut EG, Id, &Subst) -> bool {
+        move |egraph, _id, subst| {
+            let eclass = subst[v];
+            for node in egraph[eclass].nodes.iter() {
+                match node {
+                    Mio::RelAlu(_) | Mio::ArithAlu(_) | Mio::SAlu(_) => return true,
+                    _ => (),
+                }
+            }
+            return false;
+        }
     }
 
     pub mod stateless {
@@ -189,10 +205,24 @@ pub mod tofino_alus {
 
         pub fn arith_to_alu() -> Vec<RW> {
             vec![
-                rewrite!("add-to-alu"; "(+ ?x ?y)" => "(arith-alu alu-add ?x ?y)"),
-                rewrite!("minus-to-alu"; "(- ?x ?y)" => "(arith-alu alu-sub ?x ?y)"),
-                rewrite!("ite-to-max"; "(ite (> ?x ?y) ?x ?y)" => "(arith-alu alu-max ?x ?y)"),
-                rewrite!("ite-to-min"; "(ite (< ?x ?y) ?x ?y)" => "(arith-alu alu-min ?x ?y)"),
+                rewrite!("add-to-alu-leaf"; "(+ ?x ?y)" => "(arith-alu alu-add ?x ?y)"
+                    if constains_leaf("?x".parse().unwrap())
+                    if constains_leaf("?y".parse().unwrap())),
+                rewrite!("alu-add-tree";
+                    "(+ (arith-alu ?op1 ?x1 ?y1) (arith-alu ?op2 ?x2 ?y2))" =>
+                    "(arith-alu alu-add (arith-alu ?op1 ?x1 ?x2) (arith-alu ?op2 ?y1 ?y2))"),
+                rewrite!("minus-to-alu-leaf"; "(- ?x ?y)" => "(arith-alu alu-sub ?x ?y)"
+                    if constains_leaf("?x".parse().unwrap())
+                    if constains_leaf("?y".parse().unwrap())),
+                rewrite!("minus-to-alu-tree";
+                    "(- (arith-alu ?op1 ?x1 ?y1) (arith-alu ?op2 ?x2 ?y2))" =>
+                    "(arith-alu alu-sub (arith-alu ?op1 ?x1 ?x2) (arith-alu ?op2 ?y1 ?y2))"),
+                rewrite!("ite-to-max"; "(ite (> ?x ?y) ?x ?y)" => "(arith-alu alu-max ?x ?y)"
+                    if is_mapped("?x".parse().unwrap())
+                    if is_mapped("?y".parse().unwrap())),
+                rewrite!("ite-to-min"; "(ite (< ?x ?y) ?x ?y)" => "(arith-alu alu-min ?x ?y)"
+                    if is_mapped("?x".parse().unwrap())
+                    if is_mapped("?y".parse().unwrap())),
             ]
         }
     }
@@ -202,14 +232,26 @@ pub mod tofino_alus {
         pub fn conditional_assignments() -> Vec<RW> {
             vec![
                 rewrite!("cond-assign-gt";
-                    "(ite (> ?v1 ?v2) (arith-alu ?op1 ?x1 ?y1) (arith-alu ?op2 ?x2 ?y2))"
-                        => "(salu (rel-alu alu-gt ?v1 ?v2) (arith-alu ?op1 ?x1 ?y1) (arith-alu ?op2 ?x2 ?y2))"),
+                    "(ite (> (arith-alu alu-add ?v1 ?v2) ?c) (arith-alu ?op1 ?x1 ?y1) (arith-alu ?op2 ?x2 ?y2))"
+                        => "(salu (rel-alu alu-gt ?v1 ?v2) (arith-alu ?op1 ?x1 ?y1) (arith-alu ?op2 ?x2 ?y2))"
+                            if constains_leaf("?x1".parse().unwrap())
+                            if constains_leaf("?x2".parse().unwrap())
+                            if constains_leaf("?y1".parse().unwrap())
+                            if constains_leaf("?y2".parse().unwrap())),
                 rewrite!("cond-assign-lt";
                     "(ite (< ?v1 ?v2) (arith-alu ?op1 ?x1 ?y1) (arith-alu ?op2 ?x2 ?y2))"
-                        => "(salu (rel-alu alu-lt ?v1 ?v2) (arith-alu ?op1 ?x1 ?y1) (arith-alu ?op2 ?x2 ?y2))"),
+                        => "(salu (rel-alu alu-lt ?v1 ?v2) (arith-alu ?op1 ?x1 ?y1) (arith-alu ?op2 ?x2 ?y2))"
+                            if constains_leaf("?x1".parse().unwrap())
+                            if constains_leaf("?x2".parse().unwrap())
+                            if constains_leaf("?y1".parse().unwrap())
+                            if constains_leaf("?y2".parse().unwrap())),
                 rewrite!("cond-assign-eq";
                     "(ite (= ?v1 ?v2) (arith-alu ?op1 ?x1 ?y1) (arith-alu ?op2 ?x2 ?y2))"
-                        => "(salu (rel-alu alu-eq ?v1 ?v2) (arith-alu ?op1 ?x1 ?y1) (arith-alu ?op2 ?x2 ?y2))"),
+                        => "(salu (rel-alu alu-eq ?v1 ?v2) (arith-alu ?op1 ?x1 ?y1) (arith-alu ?op2 ?x2 ?y2))"
+                            if constains_leaf("?x1".parse().unwrap())
+                            if constains_leaf("?x2".parse().unwrap())
+                            if constains_leaf("?y1".parse().unwrap())
+                            if constains_leaf("?y2".parse().unwrap())),
             ]
         }
     }
