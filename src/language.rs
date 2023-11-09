@@ -18,6 +18,7 @@ pub mod ir {
             "gite" = GIte([Id; 2]),
             "keys" = Keys(Vec<Id>),
             "actions" = Actions(Vec<Id>),
+            "elab" = Elaborations(Vec<Id>),
             // putting tables in the same stage; equivalent to T1 || T2
             // (join ?t1 ?t2)
             "join" = Join([Id; 2]),
@@ -546,14 +547,27 @@ pub mod ir {
             // with the constant value
             if let MioAnalysisData::Action(ActionAnalysis {
                 constant: Some(constant),
+                checked_type,
+                elaborations,
                 ..
-            }) = &egraph[id].data
+            }) = egraph[id].data.clone()
             {
                 let new_id = egraph.add(Mio::Constant(constant.clone()));
                 let const_op = egraph.add(Mio::ArithAluOps(ArithAluOps::Const));
                 let alu_const = egraph.add(Mio::ArithAlu(vec![const_op, new_id]));
-                egraph.union(id, new_id);
-                egraph.union(id, alu_const);
+                let f = egraph.union(id, new_id);
+                let f = egraph.union(id, alu_const) || f;
+                if f {
+                    egraph.rebuild();
+                }
+                let rt = egraph.find(id);
+                egraph[rt].data = MioAnalysis::new_action_data(
+                    HashSet::new(),
+                    HashSet::new(),
+                    checked_type.clone(),
+                    Some(constant.clone()),
+                    elaborations.clone(),
+                )
             }
         }
 
@@ -694,7 +708,7 @@ pub mod ir {
                     None,
                     HashSet::new(),
                 ),
-                Mio::Actions(actions) => {
+                Mio::Elaborations(actions) | Mio::Actions(actions) => {
                     let mut reads = HashSet::new();
                     let mut writes = HashSet::new();
                     let mut elaborations = HashSet::new();
@@ -896,7 +910,7 @@ pub mod ir {
                     )
                 }
                 Mio::Symbol(sym) => Self::new_action_data(
-                    HashSet::new(),
+                    HashSet::from([sym.clone()]),
                     HashSet::new(),
                     if egraph.analysis.gamma.contains_key(sym) {
                         egraph.analysis.gamma[sym].clone()
@@ -1041,14 +1055,19 @@ pub mod utils {
 }
 
 pub mod transforms {
-    use std::rc::Rc;
+    use std::{
+        collections::{HashMap, HashSet},
+        rc::Rc,
+        thread::current,
+    };
 
-    use egg::{EGraph, Id, RecExpr};
+    use egg::{Analysis, EGraph, Id, Language, RecExpr};
 
     use crate::{
+        language::ir::MioAnalysisData,
         p4::{
             self,
-            p4ir::{Expr, Stmt, UnOps},
+            p4ir::{Expr, Stmt, Table, UnOps},
         },
         utils::RegionedMap,
     };
@@ -1061,7 +1080,9 @@ pub mod transforms {
     pub fn insert_expr(
         expr: &p4::p4ir::Expr,
         built: &RegionedMap<String, (Expr, Id)>,
+        condition: &Expr,
         recexpr: &mut RecExpr<Mio>,
+        reads: &mut HashMap<String, Expr>,
     ) -> Id {
         match expr {
             Expr::Int(v) => recexpr.add(Mio::Constant(Constant::Int(*v))),
@@ -1070,16 +1091,19 @@ pub mod transforms {
                 if let Some(v) = built.get(name) {
                     v.1
                 } else {
+                    if name.contains(".") {
+                        reads.insert(name.clone(), condition.clone());
+                    }
                     recexpr.add(Mio::Symbol(name.clone()))
                 }
             }
             Expr::BinOpExpr(op, lhs, rhs) => {
-                let lhs_id = insert_expr(lhs, built, recexpr);
-                let rhs_id = insert_expr(rhs, built, recexpr);
+                let lhs_id = insert_expr(lhs, built, condition, recexpr, reads);
+                let rhs_id = insert_expr(rhs, built, condition, recexpr, reads);
                 recexpr.add(op.to_mio(lhs_id, rhs_id))
             }
             Expr::UnOpExpr(op, expr) => {
-                let expr_id = insert_expr(expr, built, recexpr);
+                let expr_id = insert_expr(expr, built, condition, recexpr, reads);
                 recexpr.add(op.to_mio(expr_id))
             }
         }
@@ -1090,19 +1114,24 @@ pub mod transforms {
         built: RegionedMap<String, (Expr, Id)>,
         condition: &Expr,
         recexpr: &mut RecExpr<Mio>,
+        reads: &mut HashMap<String, Expr>,
+        writes: &mut HashMap<String, Expr>,
     ) -> RegionedMap<String, (Expr, Id)> {
         match stmt {
             Stmt::Block(stmts) => {
                 let mut c = built;
                 for stmt in stmts {
-                    c = walk_stmt(stmt, c, condition, recexpr);
+                    c = walk_stmt(stmt, c, condition, recexpr, reads, writes);
                 }
                 c
             }
             Stmt::Assign(field, v) => {
                 if let Expr::Var(field) = field {
-                    let v_id = insert_expr(v, &built, recexpr);
+                    let v_id = insert_expr(v, &built, condition, recexpr, reads);
                     let mut c = built;
+                    if field.contains(".") {
+                        writes.insert(field.clone(), condition.clone());
+                    }
                     c.insert(field.clone(), (condition.clone(), v_id));
                     c
                 } else {
@@ -1114,27 +1143,35 @@ pub mod transforms {
                 let lhs = recexpr.add(Mio::Symbol(x.clone()));
                 let rhs = recexpr.add(Mio::Symbol(y.clone()));
                 recexpr.add(Mio::Read([lhs, rhs]));
+                reads.insert(y.clone(), condition.clone());
                 let mut c = built;
                 c.insert(y.clone(), (condition.clone(), rhs));
+                c.insert(x.clone(), (condition.clone(), rhs));
                 c
             }
             Stmt::Write(x, y) => {
                 let lhs = recexpr.add(Mio::Symbol(x.clone()));
-                let rhs = insert_expr(y, &built, recexpr);
-                recexpr.add(Mio::Write([lhs, rhs]));
-                built
+                debug_assert!(built.contains_key(y));
+                let rhs = built.get(y).unwrap().1;
+                writes.insert(x.clone(), condition.clone());
+                let id = recexpr.add(Mio::Write([lhs, rhs]));
+                let mut c = built;
+                c.insert(x.clone(), (condition.clone(), id));
+                c
             }
             Stmt::If(cond, ib, eb) => {
                 let mut current = built.clone();
                 let parent = Rc::new(built);
                 let ib_built = RegionedMap::new(Some(parent.clone()));
                 let eb_built = RegionedMap::new(Some(parent));
-                let ib_built = walk_stmt(ib, ib_built, cond, recexpr);
+                let ib_built = walk_stmt(ib, ib_built, cond, recexpr, reads, writes);
                 let mut eb_built = walk_stmt(
                     eb,
                     eb_built,
                     &Expr::UnOpExpr(UnOps::Not, Box::new(cond.clone())),
                     recexpr,
+                    reads,
+                    writes,
                 );
                 // In theory we can use an SMT solver to check whether path conditions are
                 // negations of each other; this will gives us a compact ite representation.
@@ -1146,34 +1183,56 @@ pub mod transforms {
                         let eb_v = eb_built.get_local(ib_k).unwrap().clone();
                         let eb = if current.contains_key(ib_k) {
                             let (cond, body) = current.get(ib_k).unwrap();
-                            let default_branch = insert_expr(cond, &current, recexpr);
-                            let sym = recexpr.add(Mio::Symbol(ib_k.clone()));
-                            recexpr.add(Mio::Ite([default_branch, body.clone(), sym]))
+                            if cond.is_true() {
+                                body.clone()
+                            } else {
+                                let default_branch =
+                                    insert_expr(cond, &current, condition, recexpr, reads);
+                                let sym = recexpr.add(Mio::Symbol(ib_k.clone()));
+                                recexpr.add(Mio::Ite([default_branch, body.clone(), sym]))
+                            }
                         } else {
                             recexpr.add(Mio::Symbol(ib_k.clone()))
                         };
-                        let eb_vid = insert_expr(&eb_v.0, &current, recexpr);
-                        let e = Mio::Ite([
-                            insert_expr(&ib_v.0, &current, recexpr),
-                            ib_v.1.clone(),
-                            recexpr.add(Mio::Ite([eb_vid, eb_v.1.clone(), eb])),
-                        ]);
-                        let new_id = recexpr.add(e);
+                        let eb_id = if eb_v.0.is_true() {
+                            eb_v.1.clone()
+                        } else {
+                            let eb_vid = insert_expr(&eb_v.0, &current, condition, recexpr, reads);
+                            recexpr.add(Mio::Ite([eb_vid, eb_v.1.clone(), eb]))
+                        };
+                        let new_id = if ib_v.0.is_true() {
+                            ib_v.1.clone()
+                        } else {
+                            let ib_cid = insert_expr(&ib_v.0, &current, condition, recexpr, reads);
+                            recexpr.add(Mio::Ite([ib_cid, ib_v.1.clone(), eb_id]))
+                        };
                         current.insert(ib_k.clone(), (condition.clone(), new_id));
                         eb_built.remove(ib_k);
                     } else {
                         let ib_v = ib_built.get_local(ib_k).unwrap().clone();
-                        let eb = if current.contains_key(ib_k) {
-                            let (cond, value) = current.get(ib_k).unwrap();
-                            let default_branch = insert_expr(cond, &current, recexpr);
-                            let sym = recexpr.add(Mio::Symbol(ib_k.clone()));
-                            recexpr.add(Mio::Ite([default_branch, value.clone(), sym]))
+                        let new_id = if ib_v.0.is_true() {
+                            ib_v.1.clone()
                         } else {
-                            recexpr.add(Mio::Symbol(ib_k.clone()))
+                            let eb = if current.contains_key(ib_k) {
+                                let (cond, value) = current.get(ib_k).unwrap();
+                                if cond.is_true() {
+                                    value.clone()
+                                } else {
+                                    let default_branch =
+                                        insert_expr(cond, &current, condition, recexpr, reads);
+                                    let sym = recexpr.add(Mio::Symbol(ib_k.clone()));
+                                    recexpr.add(Mio::Ite([default_branch, value.clone(), sym]))
+                                }
+                            } else {
+                                recexpr.add(Mio::Symbol(ib_k.clone()))
+                            };
+                            let e = Mio::Ite([
+                                insert_expr(&ib_v.0, &current, condition, recexpr, reads),
+                                ib_v.1.clone(),
+                                eb,
+                            ]);
+                            recexpr.add(e)
                         };
-                        let e =
-                            Mio::Ite([insert_expr(&ib_v.0, &current, recexpr), ib_v.1.clone(), eb]);
-                        let new_id = recexpr.add(e);
                         current.insert(ib_k.clone(), (condition.clone(), new_id));
                     }
                 }
@@ -1185,7 +1244,7 @@ pub mod transforms {
                         recexpr.add(Mio::Symbol(eb_k.clone()))
                     };
                     let e = Mio::Ite([
-                        insert_expr(&eb_v.0, &current, recexpr),
+                        insert_expr(&eb_v.0, &current, condition, recexpr, reads),
                         eb_v.1.clone(),
                         ib.clone(),
                     ]);
@@ -1197,11 +1256,83 @@ pub mod transforms {
         }
     }
 
-    pub fn stmt_to_recexpr(stmt: &Stmt) -> (RecExpr<Mio>, RegionedMap<String, (Expr, Id)>) {
+    pub fn stmt_to_recexpr(
+        stmt: &Stmt,
+    ) -> (
+        RecExpr<Mio>,
+        RegionedMap<String, (Expr, Id)>,
+        HashMap<String, Expr>,
+        HashMap<String, Expr>,
+    ) {
         let mut recexpr = RecExpr::<Mio>::default();
+        let mut reads = HashMap::new();
+        let mut writes = HashMap::new();
         let built = RegionedMap::default();
-        let built = walk_stmt(stmt, built, &Expr::Bool(true), &mut recexpr);
-        (recexpr, built)
+        let built = walk_stmt(
+            stmt,
+            built,
+            &Expr::Bool(true),
+            &mut recexpr,
+            &mut reads,
+            &mut writes,
+        );
+        (recexpr, built, reads, writes)
+    }
+
+    pub fn tables_to_egraph(mut tables: Vec<Table>) -> EGraph<Mio, MioAnalysis> {
+        let mut egraph = EGraph::<Mio, MioAnalysis>::default();
+        let mut table_ids = vec![];
+        while let Some(table) = tables.pop() {
+            let mut action_elaborations = vec![];
+            for (_action_name, action) in table.actions {
+                let (recexpr, built, _reads, writes) = stmt_to_recexpr(&action);
+                let mut worklist = vec![];
+                for k in writes.keys() {
+                    debug_assert!(built.contains_key(k));
+                    let (_, id) = built.get(k).unwrap();
+                    worklist.push((k.clone(), *id));
+                }
+                worklist.sort_by(|a, b| b.1.cmp(&a.1));
+                let mut action_ids = vec![];
+                while let Some((k, id)) = worklist.pop() {
+                    let expr = recexpr[id].build_recexpr(|id| recexpr[id].clone());
+                    let egraph_id = egraph.add_expr(&expr);
+                    if let MioAnalysisData::Action(u) = &mut egraph[egraph_id].data {
+                        println!("Action update {}:\n{:?}", k, u);
+                        u.writes = u
+                            .writes
+                            .union(&HashSet::from([k.clone()]))
+                            .cloned()
+                            .collect();
+                        u.elaborations = HashSet::from([k.clone()]);
+                    } else {
+                        panic!("Should be an action data for {}", k);
+                    }
+                    action_ids.push(egraph_id);
+                }
+                action_elaborations.push(action_ids);
+            }
+            let keys = table
+                .keys
+                .iter()
+                .map(|k| egraph.add(Mio::Symbol(k.clone())))
+                .collect();
+            let actions = action_elaborations
+                .iter()
+                .map(|ids| egraph.add(Mio::Elaborations(ids.clone())))
+                .collect();
+            let keys_id = egraph.add(Mio::Keys(keys));
+            let actions_id = egraph.add(Mio::Actions(actions));
+            let gite_id = egraph.add(Mio::GIte([keys_id, actions_id]));
+            if table_ids.len() == 0 {
+                table_ids.push(gite_id);
+            } else {
+                let prev_id = table_ids.pop().unwrap();
+                let seq_id = egraph.add(Mio::Seq([gite_id, prev_id]));
+                table_ids.push(seq_id);
+            }
+        }
+        return egraph;
     }
 }
 
@@ -1212,18 +1343,24 @@ mod test {
 
     use super::{
         ir::{Constant, Mio, MioAnalysis},
-        transforms::stmt_to_recexpr,
+        transforms::{stmt_to_recexpr, tables_to_egraph},
     };
     use crate::{
         language::utils::interp_recexpr,
         p4::{
+            example_progs,
             macros::*,
             p4ir::{interp, Expr, Stmt},
         },
     };
 
+    #[test]
+    fn test_table_to_egraph() {
+        tables_to_egraph(vec![example_progs::rcp()]);
+    }
+
     fn run_walk_stmt(stmts: Stmt, ctx: &HashMap<String, Mio>) {
-        let (recexpr, built) = stmt_to_recexpr(&stmts);
+        let (recexpr, built, _reads, _writes) = stmt_to_recexpr(&stmts);
         // egraph.dot().to_pdf("stmt_to_egraph.pdf").unwrap();
         println!("Stmt:\n{:?}", stmts);
         let mut p4ctx = ctx.clone();

@@ -1,7 +1,7 @@
 pub mod p4ir {
     use std::{collections::HashMap, rc::Rc};
 
-    use egg::{Id, RecExpr};
+    use egg::{Id, Language, RecExpr};
 
     use crate::{
         language::{
@@ -11,7 +11,7 @@ pub mod p4ir {
         utils::RegionedMap,
     };
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Hash, PartialEq, Eq)]
     pub enum BinOps {
         Add,
         Sub,
@@ -57,7 +57,7 @@ pub mod p4ir {
         }
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Hash, PartialEq, Eq)]
     pub enum UnOps {
         Neg,
         Not,
@@ -74,7 +74,7 @@ pub mod p4ir {
         }
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Hash, PartialEq, Eq)]
     pub enum Expr {
         Var(String),
         Int(i32),
@@ -105,6 +105,12 @@ pub mod p4ir {
             Self::to_mio_helper(expr, &mut result);
             result
         }
+        pub fn is_true(&self) -> bool {
+            match self {
+                Expr::Bool(b) => *b,
+                _ => false,
+            }
+        }
     }
 
     #[derive(Debug, Clone)]
@@ -113,7 +119,7 @@ pub mod p4ir {
         If(Expr, Box<Stmt>, Box<Stmt>),
         Block(Vec<Stmt>),
         Read(String, String),
-        Write(String, Expr),
+        Write(String, String),
     }
 
     pub fn interp(stmt: &Stmt, ctx: &mut HashMap<String, Mio>) {
@@ -151,8 +157,7 @@ pub mod p4ir {
                 }
             }
             Stmt::Write(gvar, expr) => {
-                let value = interp_recexpr(&Expr::to_recexpr(expr), ctx);
-                ctx.insert(gvar.clone(), value);
+                ctx.insert(gvar.clone(), ctx.get(expr).unwrap().clone());
             }
         }
     }
@@ -327,7 +332,7 @@ pub mod macros {
 
     macro_rules! p4_write {
         ($x:expr, $y:expr) => {
-            Stmt::Write($x.to_string(), $y)
+            Stmt::Write($x.to_string(), $y.to_string())
         };
     }
 
@@ -348,6 +353,7 @@ pub mod example_progs {
             p4_read!("input_traffic_bytes_tmp", "input_traffic_bytes"),
             p4_read!("sum_rtt_tmp", "sum_rtt"),
             p4_read!("num_pkts_tmp", "num_pkts"),
+            assign!("input_traffic_bytes_tmp" => add!(var!("input_traffic_bytes_tmp"), var!("meta.size_bytes"))),
             ite!(
                 lt!(var!("meta.rtt"), Expr::Int(30)),
                 block!(
@@ -356,9 +362,9 @@ pub mod example_progs {
                 ),
                 block!()
             ),
-            p4_write!("input_traffic_bytes", var!("input_traffic_bytes_tmp")),
-            p4_write!("sum_rtt", var!("sum_rtt_tmp")),
-            p4_write!("num_pkts", var!("num_pkts_tmp"))
+            p4_write!("input_traffic_bytes", "input_traffic_bytes_tmp"),
+            p4_write!("sum_rtt", "sum_rtt_tmp"),
+            p4_write!("num_pkts", "num_pkts_tmp")
         );
         let mut table = Table::new("rcp_table".to_string(), vec!["meta.rcp_key".to_string()]);
         table.add_action("set_pkt".into(), set_pkt);
