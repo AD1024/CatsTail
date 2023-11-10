@@ -21,6 +21,23 @@ fn constains_leaf(v: Var) -> impl Fn(&mut EG, Id, &Subst) -> bool {
     }
 }
 
+fn none_global(v: Var) -> impl Fn(&mut EG, Id, &Subst) -> bool {
+    move |egraph, _id, subst| {
+        let eclass = subst[v];
+        match &egraph[eclass].data {
+            MioAnalysisData::Action(u) => {
+                for elaborated in u.elaborations.iter() {
+                    if elaborated.contains("global.") {
+                        return false;
+                    }
+                }
+            }
+            _ => (),
+        }
+        return true;
+    }
+}
+
 fn independent_actions(a1s: Var, a2s: Var) -> impl Fn(&mut EG, Id, &Subst) -> bool {
     move |egraph, _id, subst| {
         let c1 = subst[a1s];
@@ -297,28 +314,38 @@ pub mod tofino_alus {
     use super::{constains_leaf, is_mapped, rewrite, Var, EG, RW};
 
     pub mod stateless {
+        use crate::rewrites::none_global;
+
         use super::*;
 
         pub fn arith_to_alu() -> Vec<RW> {
             vec![
                 rewrite!("add-to-alu-leaf"; "(+ ?x ?y)" => "(arith-alu alu-add ?x ?y)"
                     if constains_leaf("?x".parse().unwrap())
-                    if constains_leaf("?y".parse().unwrap())),
+                    if constains_leaf("?y".parse().unwrap())
+                    if none_global("?x".parse().unwrap())
+                    if none_global("?y".parse().unwrap())),
                 rewrite!("alu-add-tree";
                     "(+ (arith-alu ?op1 ?x1 ?y1) (arith-alu ?op2 ?x2 ?y2))" =>
                     "(arith-alu alu-add (arith-alu ?op1 ?x1 ?x2) (arith-alu ?op2 ?y1 ?y2))"),
                 rewrite!("minus-to-alu-leaf"; "(- ?x ?y)" => "(arith-alu alu-sub ?x ?y)"
                     if constains_leaf("?x".parse().unwrap())
-                    if constains_leaf("?y".parse().unwrap())),
+                    if constains_leaf("?y".parse().unwrap())
+                    if none_global("?x".parse().unwrap())
+                    if none_global("?y".parse().unwrap())),
                 rewrite!("minus-to-alu-tree";
                     "(- (arith-alu ?op1 ?x1 ?y1) (arith-alu ?op2 ?x2 ?y2))" =>
                     "(arith-alu alu-sub (arith-alu ?op1 ?x1 ?x2) (arith-alu ?op2 ?y1 ?y2))"),
                 rewrite!("ite-to-max"; "(ite (> ?x ?y) ?x ?y)" => "(arith-alu alu-max ?x ?y)"
                     if is_mapped("?x".parse().unwrap())
-                    if is_mapped("?y".parse().unwrap())),
+                    if is_mapped("?y".parse().unwrap())
+                    if none_global("?x".parse().unwrap())
+                    if none_global("?y".parse().unwrap())),
                 rewrite!("ite-to-min"; "(ite (< ?x ?y) ?x ?y)" => "(arith-alu alu-min ?x ?y)"
                     if is_mapped("?x".parse().unwrap())
-                    if is_mapped("?y".parse().unwrap())),
+                    if is_mapped("?y".parse().unwrap())
+                    if none_global("?x".parse().unwrap())
+                    if none_global("?y".parse().unwrap())),
             ]
         }
     }
@@ -359,6 +386,20 @@ pub mod tofino_alus {
                         if is_1_depth_mapped("?rhs".parse().unwrap())
                         if is_mapped("?ib".parse().unwrap())
                         if is_mapped("?eb".parse().unwrap())),
+                rewrite!("cond-to-salu-eq";
+                    "(ite (= ?lhs ?rhs) ?ib ?eb)" =>
+                        "(stateful-alu (rel-alu alu-eq ?lhs ?rhs) ?ib ?eb)"
+                        if is_1_depth_mapped("?lhs".parse().unwrap())
+                        if is_1_depth_mapped("?rhs".parse().unwrap())
+                        if is_mapped("?ib".parse().unwrap())
+                        if is_mapped("?eb".parse().unwrap())),
+                rewrite!("cond-to-salu-neq";
+                    "(ite (!= ?lhs ?rhs) ?ib ?eb)" =>
+                        "(stateful-alu (arith-alu alu-not (rel-alu alu-eq ?lhs ?rhs)) ?ib ?eb)"
+                        if is_1_depth_mapped("?lhs".parse().unwrap())
+                        if is_1_depth_mapped("?rhs".parse().unwrap())
+                        if is_mapped("?ib".parse().unwrap())
+                        if is_mapped("?eb".parse().unwrap())),
             ]
         }
     }
@@ -369,17 +410,18 @@ mod test {
 
     use egg::Runner;
 
-    use crate::{language::transforms::tables_to_egraph, p4::example_progs};
+    use crate::{
+        language::transforms::tables_to_egraph,
+        p4::{example_progs, p4ir::Table},
+    };
 
     use super::{
         multi_stage_action, seq_elim, split_table,
         tofino_alus::{stateful::conditional_assignments, stateless::arith_to_alu},
     };
 
-    #[test]
-    fn test_tofino_rcp() {
-        let prog = example_progs::rcp();
-        let egraph = tables_to_egraph(vec![prog]);
+    fn test_tofino_mapping(prog: Vec<Table>, filename: &'static str) {
+        let egraph = tables_to_egraph(prog);
         let rewrites = seq_elim()
             .into_iter()
             .chain(split_table(1).into_iter())
@@ -392,6 +434,16 @@ mod test {
             .with_node_limit(5_000)
             .with_time_limit(Duration::from_secs(10));
         let runner = runner.run(rewrites.iter());
-        runner.egraph.dot().to_pdf("rcp.pdf").unwrap();
+        runner.egraph.dot().to_pdf(filename).unwrap();
+    }
+
+    #[test]
+    fn test_tofino_rcp() {
+        test_tofino_mapping(example_progs::rcp(), "rcp.pdf");
+    }
+
+    #[test]
+    fn test_tofino_sampling() {
+        test_tofino_mapping(example_progs::sampling(), "sampling.pdf");
     }
 }

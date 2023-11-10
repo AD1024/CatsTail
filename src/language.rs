@@ -1149,7 +1149,7 @@ pub mod transforms {
                 reads.insert(y.clone(), condition.clone());
                 let mut c = built;
                 c.insert(y.clone(), (condition.clone(), rhs));
-                c.insert(x.clone(), (condition.clone(), rhs));
+                c.insert(x.clone(), (condition.clone(), lhs));
                 c
             }
             Stmt::Write(x, y) => {
@@ -1176,40 +1176,20 @@ pub mod transforms {
                     reads,
                     writes,
                 );
-                // In theory we can use an SMT solver to check whether path conditions are
-                // negations of each other; this will gives us a compact ite representation.
-                // w/o SMT, we can get an ite representation in the form of
-                // ite(c1, e1, ite(c2, e2, ...)) fall-through to default value
+                let mut delta = HashMap::new();
                 for ib_k in ib_built.keys() {
                     if eb_built.contains_key_local(ib_k) {
+                        // both if branch and else branch modified
                         let ib_v = ib_built.get_local(ib_k).unwrap().clone();
                         let eb_v = eb_built.get_local(ib_k).unwrap().clone();
-                        let eb = if current.contains_key(ib_k) {
-                            let (cond, body) = current.get(ib_k).unwrap();
-                            if cond.is_true() {
-                                body.clone()
-                            } else {
-                                let default_branch =
-                                    insert_expr(cond, &current, condition, recexpr, reads);
-                                let sym = recexpr.add(Mio::Symbol(ib_k.clone()));
-                                recexpr.add(Mio::Ite([default_branch, body.clone(), sym]))
-                            }
-                        } else {
-                            recexpr.add(Mio::Symbol(ib_k.clone()))
-                        };
-                        let eb_id = if eb_v.0.is_true() {
-                            eb_v.1.clone()
-                        } else {
-                            let eb_vid = insert_expr(&eb_v.0, &current, condition, recexpr, reads);
-                            recexpr.add(Mio::Ite([eb_vid, eb_v.1.clone(), eb]))
-                        };
+                        let eb_id = eb_v.1.clone();
                         let new_id = if ib_v.0.is_true() {
                             ib_v.1.clone()
                         } else {
                             let ib_cid = insert_expr(&ib_v.0, &current, condition, recexpr, reads);
                             recexpr.add(Mio::Ite([ib_cid, ib_v.1.clone(), eb_id]))
                         };
-                        current.insert(ib_k.clone(), (condition.clone(), new_id));
+                        delta.insert(ib_k.clone(), (condition.clone(), new_id));
                         eb_built.remove(ib_k);
                     } else {
                         let ib_v = ib_built.get_local(ib_k).unwrap().clone();
@@ -1236,10 +1216,13 @@ pub mod transforms {
                             ]);
                             recexpr.add(e)
                         };
-                        current.insert(ib_k.clone(), (condition.clone(), new_id));
+                        delta.insert(ib_k.clone(), (condition.clone(), new_id));
                     }
                 }
                 for eb_k in eb_built.keys() {
+                    if ib_built.contains_key(eb_k) {
+                        continue;
+                    }
                     let eb_v = eb_built.get(eb_k).unwrap().clone();
                     let ib = if current.contains_key(eb_k) {
                         current.get(eb_k).unwrap().1.clone()
@@ -1252,7 +1235,10 @@ pub mod transforms {
                         ib.clone(),
                     ]);
                     let new_id = recexpr.add(e);
-                    current.insert(eb_k.clone(), (condition.clone(), new_id));
+                    delta.insert(eb_k.clone(), (condition.clone(), new_id));
+                }
+                for (k, v) in delta.into_iter() {
+                    current.insert(k, v);
                 }
                 current
             }
@@ -1299,6 +1285,7 @@ pub mod transforms {
                 let mut action_ids = vec![];
                 while let Some((k, id)) = worklist.pop() {
                     let expr = recexpr[id].build_recexpr(|id| recexpr[id].clone());
+                    println!("{} =>\n{}", k, expr.pretty(80));
                     let egraph_id = egraph.add_expr(&expr);
                     if let MioAnalysisData::Action(u) = &mut egraph[egraph_id].data {
                         println!("Action update {}:\n{:?}", k, u);
@@ -1359,7 +1346,7 @@ mod test {
 
     #[test]
     fn test_table_to_egraph() {
-        tables_to_egraph(vec![example_progs::rcp()]);
+        tables_to_egraph(example_progs::rcp());
     }
 
     fn run_walk_stmt(stmts: Stmt, ctx: &HashMap<String, Mio>) {

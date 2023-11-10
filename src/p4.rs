@@ -344,11 +344,11 @@ pub mod macros {
 
 pub mod example_progs {
     use super::{
-        macros::{add, assign, block, ite, lt, p4_read, p4_write, var},
+        macros::{add, assign, block, eq, ite, lt, p4_read, p4_write, var},
         p4ir::{Expr, Stmt, Table},
     };
 
-    pub fn rcp() -> Table {
+    pub fn rcp() -> Vec<Table> {
         let set_pkt = block!(
             assign!("input_traffic_bytes_tmp" => var!("global.input_traffic_bytes")),
             assign!("sum_rtt_tmp" => var!("global.sum_rtt")),
@@ -368,6 +368,30 @@ pub mod example_progs {
         );
         let mut table = Table::new("rcp_table".to_string(), vec!["meta.rcp_key".to_string()]);
         table.add_action("set_pkt".into(), set_pkt);
-        return table;
+        return vec![table];
+    }
+
+    pub fn sampling() -> Vec<Table> {
+        let set_pkt = block!(
+            assign!("count_tmp" => var!("global.count")),
+            ite!(
+                eq!(var!("count_tmp"), Expr::Int(29)),
+                block!(
+                    assign!("meta.sample" => Expr::Int(1)),
+                    assign!("count_tmp" => Expr::Int(0))
+                ),
+                block!(
+                    assign!("meta.sample" => Expr::Int(0)),
+                    assign!("count_tmp" => add!(var!("count_tmp"), Expr::Int(1)))
+                )
+            ),
+            assign!("global.count" => var!("count_tmp"))
+        );
+        let mut table = Table::new(
+            "sampling_table".to_string(),
+            vec!["meta.sampling_key".to_string()],
+        );
+        table.add_action("set_pkt".into(), set_pkt);
+        return vec![table];
     }
 }
