@@ -344,7 +344,7 @@ pub mod macros {
 
 pub mod example_progs {
     use super::{
-        macros::{add, assign, block, eq, ite, lt, p4_read, p4_write, var},
+        macros::*,
         p4ir::{Expr, Stmt, Table},
     };
 
@@ -390,6 +390,30 @@ pub mod example_progs {
         let mut table = Table::new(
             "sampling_table".to_string(),
             vec!["meta.sampling_key".to_string()],
+        );
+        table.add_action("set_pkt".into(), set_pkt);
+        return vec![table];
+    }
+
+    pub fn blue_increase() -> Vec<Table> {
+        let set_pkt = block!(
+            assign!("last_update_tmp" => var!("global.last_update")),
+            assign!("p_mark_tmp" => var!("global.p_mark")),
+            assign!("meta.now_plus_free" => sub!(var!("meta.now"), Expr::Int(10))),
+            ite!(
+                gt!(var!("meta.now_plus_free"), var!("last_update_tmp")),
+                block!(
+                    assign!("p_mark_tmp" => add!(var!("p_mark_tmp"), Expr::Int(1))),
+                    assign!("last_update_tmp" => var!("meta.now"))
+                ),
+                block!()
+            ),
+            assign!("global.last_update" => var!("last_update_tmp")),
+            assign!("global.p_mark" => var!("p_mark_tmp"))
+        );
+        let mut table = Table::new(
+            "blue_increase_table".to_string(),
+            vec!["meta.blue_increase_key".to_string()],
         );
         table.add_action("set_pkt".into(), set_pkt);
         return vec![table];

@@ -159,7 +159,7 @@ pub fn split_table(n: usize) -> Vec<RW> {
 }
 
 /// Span actions across stages
-/// `update_limit` is the maxium number of updates allowed in a stage for an action
+/// `update_limit` is the maxium number of global updates allowed in a stage for an action
 /// Also need to guarantee that actions kept in the table do not modify the keys
 pub fn multi_stage_action(update_limit: usize) -> Vec<RW> {
     struct MultiStagedApplier(Var, Var, usize);
@@ -182,14 +182,22 @@ pub fn multi_stage_action(update_limit: usize) -> Vec<RW> {
             for elabs in egraph[aid].nodes[0].children() {
                 let mut remained = vec![];
                 let mut split = vec![];
+                let mut num_global_writes = 0;
                 for elaboration in egraph[*elabs].nodes[0].children() {
                     // each elaboration
                     if MioAnalysis::write_set(egraph, *elaboration).is_disjoint(keys_read) {
-                        if remained.len() == limit {
-                            split.push(*elaboration);
-                        } else {
-                            // push to limit; maximize stage utilization
-                            remained.push(*elaboration);
+                        match &egraph[*elaboration].data {
+                            MioAnalysisData::Action(u) => {
+                                if u.elaborations.iter().any(|x| x.contains("global.")) {
+                                    if num_global_writes == limit {
+                                        split.push(*elaboration);
+                                    } else {
+                                        num_global_writes += 1;
+                                        remained.push(*elaboration);
+                                    }
+                                }
+                            }
+                            _ => remained.push(*elaboration),
                         }
                     } else {
                         split.push(*elaboration);
@@ -264,14 +272,21 @@ pub fn predicate_rewrites() -> Vec<RW> {
 }
 
 /// Check whether a matched e-class has been mapped to an ALU
-fn is_mapped(v: Var) -> impl Fn(&mut EG, Id, &Subst) -> bool {
+fn is_mapped(v: Var, stateful: bool) -> impl Fn(&mut EG, Id, &Subst) -> bool {
     move |egraph, _id, subst| {
         let eclass = subst[v];
         for node in egraph[eclass].nodes.iter() {
-            match node {
-                Mio::RelAlu(_) | Mio::ArithAlu(_) | Mio::SAlu(_) => return true,
-                Mio::Symbol(_) => return true,
-                _ => (),
+            if stateful {
+                match node {
+                    Mio::SAlu(_) | Mio::Symbol(_) => return true,
+                    _ => (),
+                }
+            } else {
+                match node {
+                    Mio::RelAlu(_) | Mio::ArithAlu(_) => return true,
+                    Mio::Symbol(_) => return true,
+                    _ => (),
+                }
             }
         }
         return false;
@@ -314,38 +329,76 @@ pub mod tofino_alus {
     use super::{constains_leaf, is_mapped, rewrite, Var, EG, RW};
 
     pub mod stateless {
-        use crate::rewrites::none_global;
+        use egg::{Applier, Pattern};
+
+        use crate::{
+            language::ir::{MioAnalysis, MioAnalysisData},
+            rewrites::none_global,
+        };
 
         use super::*;
 
         pub fn arith_to_alu() -> Vec<RW> {
+            struct ArithToAluApplier(&'static str, Var, Var);
+            impl Applier<Mio, MioAnalysis> for ArithToAluApplier {
+                fn apply_one(
+                    &self,
+                    egraph: &mut egg::EGraph<Mio, MioAnalysis>,
+                    eclass: Id,
+                    subst: &Subst,
+                    searcher_ast: Option<&egg::PatternAst<Mio>>,
+                    rule_name: egg::Symbol,
+                ) -> Vec<Id> {
+                    let (elaborations, reads) = match &egraph[eclass].data {
+                        MioAnalysisData::Action(u) => (u.elaborations.clone(), u.reads.clone()),
+                        _ => panic!("not an action"),
+                    };
+                    if elaborations
+                        .iter()
+                        .chain(reads.iter())
+                        .any(|x| x.contains("global."))
+                    {
+                        // format!("(stateful-alu (arith-alu {} {} {}) alu-idle alu-idle))", self.2, self.0, self.1)
+                        let ops_id = egraph.add(Mio::ArithAluOps(self.0.parse().unwrap()));
+                        let lhs_id = subst[self.1];
+                        let rhs_id = subst[self.2];
+                        let global_update_action =
+                            egraph.add(Mio::ArithAlu(vec![ops_id, lhs_id, rhs_id]));
+                        match &mut egraph[global_update_action].data {
+                            MioAnalysisData::Action(u) => u.elaborations = elaborations,
+                            _ => panic!("not an action when converting to a statefu alu"),
+                        }
+                        let idle_ops = egraph.add(Mio::ArithAluOps("alu-idle".parse().unwrap()));
+                        let stateful_alu =
+                            egraph.add(Mio::SAlu(vec![global_update_action, idle_ops, idle_ops]));
+                        egraph.union(eclass, stateful_alu);
+                        vec![eclass, global_update_action, stateful_alu]
+                    } else {
+                        let pattern = format!("(arith-alu {} {} {})", self.2, self.0, self.1);
+                        let pattern = pattern.parse::<Pattern<Mio>>().unwrap();
+                        pattern.apply_one(egraph, eclass, subst, searcher_ast, rule_name)
+                    }
+                }
+            }
             vec![
-                rewrite!("add-to-alu-leaf"; "(+ ?x ?y)" => "(arith-alu alu-add ?x ?y)"
+                rewrite!("add-to-alu-leaf"; "(+ ?x ?y)" => { ArithToAluApplier("alu-add", "?x".parse().unwrap(), "?y".parse().unwrap()) }
                     if constains_leaf("?x".parse().unwrap())
-                    if constains_leaf("?y".parse().unwrap())
-                    if none_global("?x".parse().unwrap())
-                    if none_global("?y".parse().unwrap())),
+                    if constains_leaf("?y".parse().unwrap())),
                 rewrite!("alu-add-tree";
                     "(+ (arith-alu ?op1 ?x1 ?y1) (arith-alu ?op2 ?x2 ?y2))" =>
                     "(arith-alu alu-add (arith-alu ?op1 ?x1 ?x2) (arith-alu ?op2 ?y1 ?y2))"),
-                rewrite!("minus-to-alu-leaf"; "(- ?x ?y)" => "(arith-alu alu-sub ?x ?y)"
+                rewrite!("minus-to-alu-leaf"; "(- ?x ?y)" => { ArithToAluApplier("alu-sub", "?x".parse().unwrap(), "?y".parse().unwrap()) }
                     if constains_leaf("?x".parse().unwrap())
-                    if constains_leaf("?y".parse().unwrap())
-                    if none_global("?x".parse().unwrap())
-                    if none_global("?y".parse().unwrap())),
+                    if constains_leaf("?y".parse().unwrap())),
                 rewrite!("minus-to-alu-tree";
                     "(- (arith-alu ?op1 ?x1 ?y1) (arith-alu ?op2 ?x2 ?y2))" =>
                     "(arith-alu alu-sub (arith-alu ?op1 ?x1 ?x2) (arith-alu ?op2 ?y1 ?y2))"),
-                rewrite!("ite-to-max"; "(ite (> ?x ?y) ?x ?y)" => "(arith-alu alu-max ?x ?y)"
-                    if is_mapped("?x".parse().unwrap())
-                    if is_mapped("?y".parse().unwrap())
-                    if none_global("?x".parse().unwrap())
-                    if none_global("?y".parse().unwrap())),
-                rewrite!("ite-to-min"; "(ite (< ?x ?y) ?x ?y)" => "(arith-alu alu-min ?x ?y)"
-                    if is_mapped("?x".parse().unwrap())
-                    if is_mapped("?y".parse().unwrap())
-                    if none_global("?x".parse().unwrap())
-                    if none_global("?y".parse().unwrap())),
+                rewrite!("ite-to-max"; "(ite (> ?x ?y) ?x ?y)" => { ArithToAluApplier("alu-max", "?x".parse().unwrap(), "?y".parse().unwrap()) }
+                    if is_mapped("?x".parse().unwrap(), false)
+                    if is_mapped("?y".parse().unwrap(), false)),
+                rewrite!("ite-to-min"; "(ite (< ?x ?y) ?x ?y)" => { ArithToAluApplier("alu-min", "?x".parse().unwrap(), "?y".parse().unwrap()) }
+                    if is_mapped("?x".parse().unwrap(), false)
+                    if is_mapped("?y".parse().unwrap(), false)),
             ]
         }
     }
@@ -363,43 +416,43 @@ pub mod tofino_alus {
                         "(stateful-alu (rel-alu alu-lt ?lhs ?rhs) ?ib ?eb)"
                         if is_1_depth_mapped("?lhs".parse().unwrap())
                         if is_1_depth_mapped("?rhs".parse().unwrap())
-                        if is_mapped("?ib".parse().unwrap())
-                        if is_mapped("?eb".parse().unwrap())),
+                        if is_mapped("?ib".parse().unwrap(), true)
+                        if is_mapped("?eb".parse().unwrap(), true)),
                 rewrite!("cond-to-salu-gt";
                     "(ite (> ?lhs ?rhs) ?ib ?eb)" =>
                         "(stateful-alu (rel-alu alu-gt ?lhs ?rhs) ?ib ?eb)"
                         if is_1_depth_mapped("?lhs".parse().unwrap())
                         if is_1_depth_mapped("?rhs".parse().unwrap())
-                        if is_mapped("?ib".parse().unwrap())
-                        if is_mapped("?eb".parse().unwrap())),
+                        if is_mapped("?ib".parse().unwrap(), true)
+                        if is_mapped("?eb".parse().unwrap(), true)),
                 rewrite!("cond-to-salu-le";
                     "(ite (<= ?lhs ?rhs) ?ib ?eb)" =>
                         "(stateful-alu (arith-alu alu-not (rel-alu alu-gt ?lhs ?rhs)) ?ib ?eb)"
                         if is_1_depth_mapped("?lhs".parse().unwrap())
                         if is_1_depth_mapped("?rhs".parse().unwrap())
-                        if is_mapped("?ib".parse().unwrap())
-                        if is_mapped("?eb".parse().unwrap())),
+                        if is_mapped("?ib".parse().unwrap(), true)
+                        if is_mapped("?eb".parse().unwrap(), true)),
                 rewrite!("cond-to-salu-ge";
                     "(ite (>= ?lhs ?rhs) ?ib ?eb)" =>
                         "(stateful-alu (arith-alu alu-not (rel-alu alu-lt ?lhs ?rhs)) ?ib ?eb)"
                         if is_1_depth_mapped("?lhs".parse().unwrap())
                         if is_1_depth_mapped("?rhs".parse().unwrap())
-                        if is_mapped("?ib".parse().unwrap())
-                        if is_mapped("?eb".parse().unwrap())),
+                        if is_mapped("?ib".parse().unwrap(), true)
+                        if is_mapped("?eb".parse().unwrap(), true)),
                 rewrite!("cond-to-salu-eq";
                     "(ite (= ?lhs ?rhs) ?ib ?eb)" =>
                         "(stateful-alu (rel-alu alu-eq ?lhs ?rhs) ?ib ?eb)"
                         if is_1_depth_mapped("?lhs".parse().unwrap())
                         if is_1_depth_mapped("?rhs".parse().unwrap())
-                        if is_mapped("?ib".parse().unwrap())
-                        if is_mapped("?eb".parse().unwrap())),
+                        if is_mapped("?ib".parse().unwrap(), true)
+                        if is_mapped("?eb".parse().unwrap(), true)),
                 rewrite!("cond-to-salu-neq";
                     "(ite (!= ?lhs ?rhs) ?ib ?eb)" =>
                         "(stateful-alu (arith-alu alu-not (rel-alu alu-eq ?lhs ?rhs)) ?ib ?eb)"
                         if is_1_depth_mapped("?lhs".parse().unwrap())
                         if is_1_depth_mapped("?rhs".parse().unwrap())
-                        if is_mapped("?ib".parse().unwrap())
-                        if is_mapped("?eb".parse().unwrap())),
+                        if is_mapped("?ib".parse().unwrap(), true)
+                        if is_mapped("?eb".parse().unwrap(), true)),
             ]
         }
     }
@@ -424,7 +477,7 @@ mod test {
         let egraph = tables_to_egraph(prog);
         let rewrites = seq_elim()
             .into_iter()
-            .chain(split_table(1).into_iter())
+            // .chain(split_table(1).into_iter())
             .chain(arith_to_alu().into_iter())
             .chain(multi_stage_action(2).into_iter())
             .chain(conditional_assignments().into_iter())
@@ -445,5 +498,10 @@ mod test {
     #[test]
     fn test_tofino_sampling() {
         test_tofino_mapping(example_progs::sampling(), "sampling.pdf");
+    }
+
+    #[test]
+    fn test_tofino_blue_increase() {
+        test_tofino_mapping(example_progs::blue_increase(), "blue_increase.pdf");
     }
 }

@@ -29,6 +29,11 @@ pub mod ir {
             "arith-alu" = ArithAlu(Vec<Id>),
             // (rel-alu ?pred ?a ?b ?imm)
             "rel-alu" = RelAlu(Vec<Id>),
+            // syntax differs across backends
+            // e.g. Intel tofino supports three outputs (with one modification to PHV)
+            // (stateful-alu ?r1 ?r2 ?o) where ?r1 and ?r2 are outputs to registers
+            // and ?o is the output to the PHV
+            // each output is tagged with their corresponding elaborated fields
             "stateful-alu" = SAlu(Vec<Id>),
             // Logical operators
             "land" = LAnd([Id; 2]),
@@ -45,6 +50,8 @@ pub mod ir {
             // Arithmetic operators
             "+" = Add([Id; 2]),
             "-" = Sub([Id; 2]),
+            "min" = Min([Id; 2]),
+            "max" = Max([Id; 2]),
             "neg" = Neg(Id),
             "write" = Write([Id; 2]),
             "read" = Read([Id; 2]),
@@ -90,6 +97,7 @@ pub mod ir {
         Min,
         Not,
         Const,
+        Idle,
     }
 
     impl Display for ArithAluOps {
@@ -101,6 +109,7 @@ pub mod ir {
                 ArithAluOps::Min => write!(f, "alu-min"),
                 ArithAluOps::Const => write!(f, "alu-const"),
                 ArithAluOps::Not => write!(f, "alu-not"),
+                ArithAluOps::Idle => write!(f, "alu-idle"),
             }
         }
     }
@@ -116,6 +125,7 @@ pub mod ir {
                 "alu-min" => Ok(ArithAluOps::Min),
                 "alu-const" => Ok(ArithAluOps::Const),
                 "alu-not" => Ok(ArithAluOps::Not),
+                "alu-idle" => Ok(ArithAluOps::Idle),
                 _ => Err(()),
             }
         }
@@ -711,7 +721,11 @@ pub mod ir {
                     None,
                     HashSet::new(),
                 ),
-                Mio::Elaborations(actions) | Mio::Actions(actions) => {
+                Mio::Elaborations(actions)
+                | Mio::ArithAlu(actions)
+                | Mio::RelAlu(actions)
+                | Mio::SAlu(actions)
+                | Mio::Actions(actions) => {
                     let mut reads = HashSet::new();
                     let mut writes = HashSet::new();
                     let mut elaborations = HashSet::new();
@@ -723,6 +737,7 @@ pub mod ir {
                                 elaborations =
                                     elaborations.union(&u.elaborations).cloned().collect();
                             }
+                            MioAnalysisData::Empty => (),
                             _ => {
                                 panic!("Use control operators to compose applications");
                             }
@@ -777,6 +792,8 @@ pub mod ir {
                 }
                 Mio::Add([a, b])
                 | Mio::Sub([a, b])
+                | Mio::Min([a, b])
+                | Mio::Max([a, b])
                 | Mio::BitAnd([a, b])
                 | Mio::BitOr([a, b])
                 | Mio::BitXor([a, b])
@@ -883,14 +900,7 @@ pub mod ir {
                         HashSet::new(),
                     )
                 }
-                // Safe to return empty data
-                // these will be populated by rewrite rules
-                // where read/write analysis has been done
-                Mio::ArithAluOps(_)
-                | Mio::SAlu(_)
-                | Mio::ArithAlu(_)
-                | Mio::RelAluOps(_)
-                | Mio::RelAlu(_) => MioAnalysisData::Empty,
+                Mio::ArithAluOps(_) | Mio::RelAluOps(_) => MioAnalysisData::Empty,
                 Mio::Read([field, pre_state]) => Self::new_action_data(
                     Self::read_set(egraph, *field).clone(),
                     Self::write_set(egraph, *pre_state).clone(),
