@@ -82,6 +82,9 @@ pub fn comm_independent_tables() -> Vec<RW> {
     ];
 }
 
+/// Split actions to two tables (if applicable)
+/// T -> T1; T2
+/// Guarantees that T1 actions do not modify the keys
 pub fn split_table(n: usize) -> Vec<RW> {
     struct SplitApplier(Var, Var, usize);
     impl Applier<Mio, MioAnalysis> for SplitApplier {
@@ -104,23 +107,18 @@ pub fn split_table(n: usize) -> Vec<RW> {
             let mut index = 0;
             for a in egraph[a1s].nodes[0].children() {
                 if MioAnalysis::write_set(egraph, *a).is_disjoint(&key_reads) {
-                    remained.push(index);
-                } else {
-                    if split.len() == split_bound {
-                        remained.push(index);
-                    } else {
+                    if remained.len() == split_bound {
                         split.push(index);
+                    } else {
+                        remained.push(index);
                     }
+                } else {
+                    split.push(index);
                 }
                 index += 1;
             }
-            if split.len() == 0 {
-                // all actions does not modify keys
-                split = if split_bound > remained.len() {
-                    vec![remained.pop().unwrap()]
-                } else {
-                    remained.split_off(remained.len() - split_bound)
-                };
+            if split.len() == 0 || remained.len() == 0 {
+                return vec![];
             }
             debug_assert!(split.len() + remained.len() == index);
             debug_assert!(split.len() <= split_bound);
@@ -133,18 +131,87 @@ pub fn split_table(n: usize) -> Vec<RW> {
             let lhs_table = egraph.add(Mio::GIte([k1s, lhs_action_id]));
             let rhs_table = egraph.add(Mio::GIte([k1s, rhs_action_id]));
             // (seq (gite ?k1s ?remaining) (gite ?k1s ?split))
-            let seq_id = egraph.add(Mio::Seq([lhs_table, rhs_table]));
+            let seq_id: Id = egraph.add(Mio::Seq([lhs_table, rhs_table]));
             egraph.union(eclass, seq_id);
-            // TODO: propagate elaboration
-            vec![eclass]
+            // TODO: propagate elaboration?
+            vec![eclass, seq_id]
         }
     }
     return vec![rewrite!("separate-action";
             "(gite ?k1s ?a1s)" => { SplitApplier("?k1s".parse().unwrap(), "?a1s".parse().unwrap(), n) })];
 }
 
-pub fn ite_to_gite() -> RW {
-    rewrite!("ite-to-gite"; "(ite ?c ?t1 ?t2)" => "(gite (keys ?c1) (actions ?t1 ?t2))")
+/// Span actions across stages
+/// `update_limit` is the maxium number of updates allowed in a stage for an action
+/// Also need to guarantee that actions kept in the table do not modify the keys
+pub fn multi_stage_action(update_limit: usize) -> Vec<RW> {
+    struct MultiStagedApplier(Var, Var, usize);
+    impl Applier<Mio, MioAnalysis> for MultiStagedApplier {
+        fn apply_one(
+            &self,
+            egraph: &mut EGraph<Mio, MioAnalysis>,
+            eclass: Id,
+            subst: &Subst,
+            _searcher_ast: Option<&egg::PatternAst<Mio>>,
+            _rule_name: egg::Symbol,
+        ) -> Vec<Id> {
+            let kid = subst[self.0];
+            let aid = subst[self.1];
+            let limit = self.2;
+            let keys_read = MioAnalysis::read_set(egraph, kid);
+            // stores a vector of elaborations (Vec<Id>)
+            let mut remained_updates = vec![];
+            let mut splitted_updates = vec![];
+            for elabs in egraph[aid].nodes[0].children() {
+                let mut remained = vec![];
+                let mut split = vec![];
+                for elaboration in egraph[*elabs].nodes[0].children() {
+                    // each elaboration
+                    if MioAnalysis::write_set(egraph, *elaboration).is_disjoint(keys_read) {
+                        if remained.len() == limit {
+                            split.push(*elaboration);
+                        } else {
+                            // push to limit; maximize stage utilization
+                            remained.push(*elaboration);
+                        }
+                    } else {
+                        split.push(*elaboration);
+                    }
+                }
+                if remained.len() == 0 || split.len() == 0 {
+                    continue;
+                }
+                remained_updates.push(remained);
+                splitted_updates.push(split);
+            }
+            if remained_updates.len() == 0 || splitted_updates.len() == 0 {
+                return vec![];
+            }
+            let lhs_table_elaborations = remained_updates
+                .into_iter()
+                .map(|v| egraph.add(Mio::Elaborations(v)))
+                .collect::<Vec<_>>();
+            let rhs_table_elaborations = splitted_updates
+                .into_iter()
+                .map(|v| egraph.add(Mio::Elaborations(v)))
+                .collect::<Vec<_>>();
+            let lhs_table_actions = egraph.add(Mio::Actions(lhs_table_elaborations));
+            let rhs_table_actions = egraph.add(Mio::Actions(rhs_table_elaborations));
+            let lhs_table = egraph.add(Mio::GIte([kid, lhs_table_actions]));
+            let rhs_table = egraph.add(Mio::GIte([kid, rhs_table_actions]));
+            let seq_id = egraph.add(Mio::Seq([lhs_table, rhs_table]));
+            egraph.union(eclass, seq_id);
+            vec![eclass, seq_id]
+        }
+    }
+    return vec![rewrite!(
+            "multi-staged-action";
+            "(gite ?k ?a)" => 
+            { MultiStagedApplier("?k".parse().unwrap(), "?a".parse().unwrap(), update_limit) })];
+}
+
+pub fn ite_to_gite() -> Vec<RW> {
+    vec![rewrite!("ite-to-gite"; "(ite ?c ?t1 ?t2)" => "(gite (keys ?c1) (actions ?t1 ?t2))")]
 }
 
 pub fn alg_simpl() -> Vec<RW> {
@@ -179,26 +246,53 @@ pub fn predicate_rewrites() -> Vec<RW> {
     ]
 }
 
+/// Check whether a matched e-class has been mapped to an ALU
+fn is_mapped(v: Var) -> impl Fn(&mut EG, Id, &Subst) -> bool {
+    move |egraph, _id, subst| {
+        let eclass = subst[v];
+        for node in egraph[eclass].nodes.iter() {
+            match node {
+                Mio::RelAlu(_) | Mio::ArithAlu(_) | Mio::SAlu(_) => return true,
+                _ => (),
+            }
+        }
+        return false;
+    }
+}
+
+/// Check whether a matched e-class has been mapped to an ALU
+/// and the computation is of depth 1
+fn is_1_depth_mapped(v: Var) -> impl Fn(&mut EG, Id, &Subst) -> bool {
+    move |egraph, _id, subst| {
+        let eclass = subst[v];
+        for node in egraph[eclass].nodes.iter() {
+            if match node {
+                Mio::RelAlu(children) | Mio::SAlu(children) | Mio::ArithAlu(children) => {
+                    children.iter().all(|c| {
+                        for node in egraph[*c].nodes.iter() {
+                            if node.is_leaf() {
+                                return true;
+                            }
+                        }
+                        return false;
+                    })
+                }
+                _ => false,
+            } {
+                return true;
+            }
+        }
+        return false;
+    }
+}
+
 pub mod tofino_alus {
 
     use egg::{Id, Subst};
 
     use crate::language::ir::Mio;
 
-    use super::{constains_leaf, rewrite, Var, EG, RW};
-
-    fn is_mapped(v: Var) -> impl Fn(&mut EG, Id, &Subst) -> bool {
-        move |egraph, _id, subst| {
-            let eclass = subst[v];
-            for node in egraph[eclass].nodes.iter() {
-                match node {
-                    Mio::RelAlu(_) | Mio::ArithAlu(_) | Mio::SAlu(_) => return true,
-                    _ => (),
-                }
-            }
-            return false;
-        }
-    }
+    use super::{constains_leaf, is_mapped, rewrite, Var, EG, RW};
 
     pub mod stateless {
         use super::*;
@@ -228,31 +322,74 @@ pub mod tofino_alus {
     }
 
     pub mod stateful {
+        use egg::Applier;
+
+        use crate::{language::ir::MioAnalysis, rewrites::is_1_depth_mapped};
+
         use super::*;
         pub fn conditional_assignments() -> Vec<RW> {
             vec![
-                rewrite!("cond-assign-gt";
-                    "(ite (> (arith-alu alu-add ?v1 ?v2) ?c) (arith-alu ?op1 ?x1 ?y1) (arith-alu ?op2 ?x2 ?y2))"
-                        => "(salu (rel-alu alu-gt ?v1 ?v2) (arith-alu ?op1 ?x1 ?y1) (arith-alu ?op2 ?x2 ?y2))"
-                            if constains_leaf("?x1".parse().unwrap())
-                            if constains_leaf("?x2".parse().unwrap())
-                            if constains_leaf("?y1".parse().unwrap())
-                            if constains_leaf("?y2".parse().unwrap())),
-                rewrite!("cond-assign-lt";
-                    "(ite (< ?v1 ?v2) (arith-alu ?op1 ?x1 ?y1) (arith-alu ?op2 ?x2 ?y2))"
-                        => "(salu (rel-alu alu-lt ?v1 ?v2) (arith-alu ?op1 ?x1 ?y1) (arith-alu ?op2 ?x2 ?y2))"
-                            if constains_leaf("?x1".parse().unwrap())
-                            if constains_leaf("?x2".parse().unwrap())
-                            if constains_leaf("?y1".parse().unwrap())
-                            if constains_leaf("?y2".parse().unwrap())),
-                rewrite!("cond-assign-eq";
-                    "(ite (= ?v1 ?v2) (arith-alu ?op1 ?x1 ?y1) (arith-alu ?op2 ?x2 ?y2))"
-                        => "(salu (rel-alu alu-eq ?v1 ?v2) (arith-alu ?op1 ?x1 ?y1) (arith-alu ?op2 ?x2 ?y2))"
-                            if constains_leaf("?x1".parse().unwrap())
-                            if constains_leaf("?x2".parse().unwrap())
-                            if constains_leaf("?y1".parse().unwrap())
-                            if constains_leaf("?y2".parse().unwrap())),
+                rewrite!("cond-to-salu-lt";
+                    "(ite (< ?lhs ?rhs) ?ib ?eb)" =>
+                        "(stateful-alu (rel-alu alu-lt ?lhs ?rhs) ?ib ?eb)"
+                        if is_1_depth_mapped("?lhs".parse().unwrap())
+                        if is_1_depth_mapped("?rhs".parse().unwrap())
+                        if is_mapped("?ib".parse().unwrap())
+                        if is_mapped("?eb".parse().unwrap())),
+                rewrite!("cond-to-salu-gt";
+                    "(ite (> ?lhs ?rhs) ?ib ?eb)" =>
+                        "(stateful-alu (rel-alu alu-gt ?lhs ?rhs) ?ib ?eb)"
+                        if is_1_depth_mapped("?lhs".parse().unwrap())
+                        if is_1_depth_mapped("?rhs".parse().unwrap())
+                        if is_mapped("?ib".parse().unwrap())
+                        if is_mapped("?eb".parse().unwrap())),
+                rewrite!("cond-to-salu-le";
+                    "(ite (<= ?lhs ?rhs) ?ib ?eb)" =>
+                        "(stateful-alu (arith-alu alu-not (rel-alu alu-gt ?lhs ?rhs)) ?ib ?eb)"
+                        if is_1_depth_mapped("?lhs".parse().unwrap())
+                        if is_1_depth_mapped("?rhs".parse().unwrap())
+                        if is_mapped("?ib".parse().unwrap())
+                        if is_mapped("?eb".parse().unwrap())),
+                rewrite!("cond-to-salu-ge";
+                    "(ite (>= ?lhs ?rhs) ?ib ?eb)" =>
+                        "(stateful-alu (arith-alu alu-not (rel-alu alu-lt ?lhs ?rhs)) ?ib ?eb)"
+                        if is_1_depth_mapped("?lhs".parse().unwrap())
+                        if is_1_depth_mapped("?rhs".parse().unwrap())
+                        if is_mapped("?ib".parse().unwrap())
+                        if is_mapped("?eb".parse().unwrap())),
             ]
         }
+    }
+}
+
+mod test {
+    use std::time::Duration;
+
+    use egg::Runner;
+
+    use crate::{language::transforms::tables_to_egraph, p4::example_progs};
+
+    use super::{
+        multi_stage_action, seq_elim, split_table,
+        tofino_alus::{stateful::conditional_assignments, stateless::arith_to_alu},
+    };
+
+    #[test]
+    fn test_tofino_rcp() {
+        let prog = example_progs::rcp();
+        let egraph = tables_to_egraph(vec![prog]);
+        let rewrites = seq_elim()
+            .into_iter()
+            .chain(split_table(1).into_iter())
+            .chain(arith_to_alu().into_iter())
+            .chain(multi_stage_action(2).into_iter())
+            .chain(conditional_assignments().into_iter())
+            .collect::<Vec<_>>();
+        let runner = Runner::default()
+            .with_egraph(egraph)
+            .with_node_limit(5_000)
+            .with_time_limit(Duration::from_secs(10));
+        let runner = runner.run(rewrites.iter());
+        runner.egraph.dot().to_pdf("rcp.pdf").unwrap();
     }
 }

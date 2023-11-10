@@ -88,6 +88,7 @@ pub mod ir {
         Sub,
         Max,
         Min,
+        Not,
         Const,
     }
 
@@ -99,6 +100,7 @@ pub mod ir {
                 ArithAluOps::Max => write!(f, "alu-max"),
                 ArithAluOps::Min => write!(f, "alu-min"),
                 ArithAluOps::Const => write!(f, "alu-const"),
+                ArithAluOps::Not => write!(f, "alu-not"),
             }
         }
     }
@@ -113,6 +115,7 @@ pub mod ir {
                 "alu-max" => Ok(ArithAluOps::Max),
                 "alu-min" => Ok(ArithAluOps::Min),
                 "alu-const" => Ok(ArithAluOps::Const),
+                "alu-not" => Ok(ArithAluOps::Not),
                 _ => Err(()),
             }
         }
