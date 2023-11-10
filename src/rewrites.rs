@@ -253,6 +253,7 @@ fn is_mapped(v: Var) -> impl Fn(&mut EG, Id, &Subst) -> bool {
         for node in egraph[eclass].nodes.iter() {
             match node {
                 Mio::RelAlu(_) | Mio::ArithAlu(_) | Mio::SAlu(_) => return true,
+                Mio::Symbol(_) => return true,
                 _ => (),
             }
         }
@@ -277,6 +278,7 @@ fn is_1_depth_mapped(v: Var) -> impl Fn(&mut EG, Id, &Subst) -> bool {
                         return false;
                     })
                 }
+                Mio::Symbol(_) => true,
                 _ => false,
             } {
                 return true;

@@ -350,9 +350,9 @@ pub mod example_progs {
 
     pub fn rcp() -> Table {
         let set_pkt = block!(
-            p4_read!("input_traffic_bytes_tmp", "input_traffic_bytes"),
-            p4_read!("sum_rtt_tmp", "sum_rtt"),
-            p4_read!("num_pkts_tmp", "num_pkts"),
+            assign!("input_traffic_bytes_tmp" => var!("global.input_traffic_bytes")),
+            assign!("sum_rtt_tmp" => var!("global.sum_rtt")),
+            assign!("num_pkts_tmp" => var!("global.num_pkts")),
             assign!("input_traffic_bytes_tmp" => add!(var!("input_traffic_bytes_tmp"), var!("meta.size_bytes"))),
             ite!(
                 lt!(var!("meta.rtt"), Expr::Int(30)),
@@ -362,9 +362,9 @@ pub mod example_progs {
                 ),
                 block!()
             ),
-            p4_write!("input_traffic_bytes", "input_traffic_bytes_tmp"),
-            p4_write!("sum_rtt", "sum_rtt_tmp"),
-            p4_write!("num_pkts", "num_pkts_tmp")
+            assign!("global.input_traffic_bytes" => var!("input_traffic_bytes_tmp")),
+            assign!("global.sum_rtt" => var!("sum_rtt_tmp")),
+            assign!("global.num_pkts" => var!("num_pkts_tmp"))
         );
         let mut table = Table::new("rcp_table".to_string(), vec!["meta.rcp_key".to_string()]);
         table.add_action("set_pkt".into(), set_pkt);
