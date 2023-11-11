@@ -1,4 +1,4 @@
-use egg::{rewrite, Applier, EGraph, Id, Language, Pattern, Rewrite, Subst, Var};
+use egg::{rewrite, Applier, EGraph, Id, Language, Pattern, Rewrite, Searcher, Subst, Var};
 
 use crate::language::{
     self,
@@ -35,6 +35,16 @@ fn none_global(v: Var) -> impl Fn(&mut EG, Id, &Subst) -> bool {
             _ => (),
         }
         return true;
+    }
+}
+
+fn same_elaboration(v1: Var, v2: Var) -> impl Fn(&mut EG, Id, &Subst) -> bool {
+    move |egraph, _id, subst| {
+        let eclass1 = subst[v1];
+        let eclass2 = subst[v2];
+        let elaborations1 = MioAnalysis::elaborations(egraph, eclass1);
+        let elaborations2 = MioAnalysis::elaborations(egraph, eclass2);
+        return elaborations1 == elaborations2;
     }
 }
 
@@ -272,19 +282,31 @@ pub fn predicate_rewrites() -> Vec<RW> {
 }
 
 /// Check whether a matched e-class has been mapped to an ALU
-fn is_mapped(v: Var, stateful: bool) -> impl Fn(&mut EG, Id, &Subst) -> bool {
+fn is_mapped(v: Var, stateful: Option<bool>) -> impl Fn(&mut EG, Id, &Subst) -> bool {
     move |egraph, _id, subst| {
         let eclass = subst[v];
         for node in egraph[eclass].nodes.iter() {
-            if stateful {
-                match node {
-                    Mio::SAlu(_) | Mio::Symbol(_) => return true,
-                    _ => (),
+            if let Some(stateful) = stateful {
+                if stateful {
+                    match node {
+                        Mio::SAlu(_) | Mio::Symbol(_) | Mio::Constant(_) => return true,
+                        _ => (),
+                    }
+                } else {
+                    match node {
+                        Mio::RelAlu(_) | Mio::ArithAlu(_) | Mio::Symbol(_) | Mio::Constant(_) => {
+                            return true
+                        }
+                        _ => (),
+                    }
                 }
             } else {
                 match node {
-                    Mio::RelAlu(_) | Mio::ArithAlu(_) => return true,
-                    Mio::Symbol(_) => return true,
+                    Mio::RelAlu(_)
+                    | Mio::ArithAlu(_)
+                    | Mio::SAlu(_)
+                    | Mio::Symbol(_)
+                    | Mio::Constant(_) => return true,
                     _ => (),
                 }
             }
@@ -294,30 +316,113 @@ fn is_mapped(v: Var, stateful: bool) -> impl Fn(&mut EG, Id, &Subst) -> bool {
 }
 
 /// Check whether a matched e-class has been mapped to an ALU
-/// and the computation is of depth 1
-fn is_1_depth_mapped(v: Var) -> impl Fn(&mut EG, Id, &Subst) -> bool {
-    move |egraph, _id, subst| {
-        let eclass = subst[v];
-        for node in egraph[eclass].nodes.iter() {
-            if match node {
-                Mio::RelAlu(children) | Mio::SAlu(children) | Mio::ArithAlu(children) => {
-                    children.iter().all(|c| {
-                        for node in egraph[*c].nodes.iter() {
-                            if node.is_leaf() {
-                                return true;
-                            }
-                        }
-                        return false;
-                    })
+/// and the computation is of at most depth n
+fn is_n_depth_mapped(
+    v: Var,
+    n: usize,
+    stateful: Option<bool>,
+) -> impl Fn(&mut EG, Id, &Subst) -> bool {
+    fn check_level(egraph: &EG, id: Id, level: usize, stateful: Option<bool>) -> bool {
+        for node in egraph[id].nodes.iter() {
+            if let Some(stateful) = stateful {
+                if stateful {
+                    if match node {
+                        Mio::SAlu(children) => children
+                            .iter()
+                            .all(|c| egraph[*c].nodes.iter().any(|n| n.is_leaf())),
+                        Mio::Symbol(_) => true,
+                        _ => false,
+                    } {
+                        return true;
+                    }
+                } else {
+                    if match node {
+                        Mio::RelAlu(children) | Mio::ArithAlu(children) => children
+                            .iter()
+                            .all(|c| egraph[*c].nodes.iter().any(|n| n.is_leaf())),
+                        Mio::Symbol(_) => true,
+                        _ => false,
+                    } {
+                        return true;
+                    }
                 }
-                Mio::Symbol(_) => true,
-                _ => false,
-            } {
-                return true;
+            } else {
+                if match node {
+                    Mio::RelAlu(children) | Mio::SAlu(children) | Mio::ArithAlu(children) => {
+                        children
+                            .iter()
+                            .all(|c| egraph[*c].nodes.iter().any(|n| n.is_leaf()))
+                    }
+                    Mio::Symbol(_) => true,
+                    _ => false,
+                } {
+                    return true;
+                }
+            }
+        }
+        if level == 0 {
+            return false;
+        }
+        for node in egraph[id].nodes.iter() {
+            if let Some(stateful_b) = stateful {
+                if stateful_b {
+                    if match node {
+                        Mio::SAlu(children) => children
+                            .iter()
+                            .any(|c| check_level(egraph, *c, level - 1, stateful)),
+                        _ => false,
+                    } {
+                        return true;
+                    }
+                } else {
+                    if match node {
+                        Mio::RelAlu(children) | Mio::ArithAlu(children) => children
+                            .iter()
+                            .any(|c| check_level(egraph, *c, level - 1, stateful)),
+                        _ => false,
+                    } {
+                        return true;
+                    }
+                }
+            } else {
+                if match node {
+                    Mio::RelAlu(children) | Mio::SAlu(children) | Mio::ArithAlu(children) => {
+                        children
+                            .iter()
+                            .any(|c| check_level(egraph, *c, level - 1, stateful))
+                    }
+                    _ => false,
+                } {
+                    return true;
+                }
             }
         }
         return false;
     }
+    move |egraph, _id, subst| {
+        let eclass = subst[v];
+        return check_level(egraph, eclass, n, stateful);
+    }
+}
+
+fn merge_stateful_alus(
+    egraph: &EGraph<Mio, MioAnalysis>,
+    u1: Vec<Id>,
+    u2: Vec<Id>,
+) -> Result<Vec<Id>, ()> {
+    u1.into_iter()
+        .zip(u2.into_iter())
+        .map(|(lhs, rhs)| {
+            let id = if MioAnalysis::is_alu_op(egraph, lhs, "alu-idle") {
+                rhs
+            } else if !MioAnalysis::is_alu_op(egraph, rhs, "alu-idle") {
+                return Err(());
+            } else {
+                lhs
+            };
+            Ok(id)
+        })
+        .collect()
 }
 
 pub mod tofino_alus {
@@ -394,65 +499,183 @@ pub mod tofino_alus {
                     "(- (arith-alu ?op1 ?x1 ?y1) (arith-alu ?op2 ?x2 ?y2))" =>
                     "(arith-alu alu-sub (arith-alu ?op1 ?x1 ?x2) (arith-alu ?op2 ?y1 ?y2))"),
                 rewrite!("ite-to-max"; "(ite (> ?x ?y) ?x ?y)" => { ArithToAluApplier("alu-max", "?x".parse().unwrap(), "?y".parse().unwrap()) }
-                    if is_mapped("?x".parse().unwrap(), false)
-                    if is_mapped("?y".parse().unwrap(), false)),
+                    if is_mapped("?x".parse().unwrap(), Some(false))
+                    if is_mapped("?y".parse().unwrap(), Some(false))),
                 rewrite!("ite-to-min"; "(ite (< ?x ?y) ?x ?y)" => { ArithToAluApplier("alu-min", "?x".parse().unwrap(), "?y".parse().unwrap()) }
-                    if is_mapped("?x".parse().unwrap(), false)
-                    if is_mapped("?y".parse().unwrap(), false)),
+                    if is_mapped("?x".parse().unwrap(), Some(false))
+                    if is_mapped("?y".parse().unwrap(), Some(false))),
+            ]
+        }
+
+        pub fn cmp_to_rel() -> Vec<RW> {
+            vec![
+                rewrite!("gt-to-rel"; "(> ?x ?y)" => "(rel-alu alu-gt ?x ?y)"
+                    if is_mapped("?x".parse().unwrap(), None)
+                    if is_mapped("?y".parse().unwrap(), None)),
+                rewrite!("lt-to-rel"; "(< ?x ?y)" => "(rel-alu alu-lt ?x ?y)"
+                    if is_mapped("?x".parse().unwrap(), None)
+                    if is_mapped("?y".parse().unwrap(), None)),
+                rewrite!("eq-to-rel"; "(= ?x ?y)" => "(rel-alu alu-eq ?x ?y)"
+                    if is_mapped("?x".parse().unwrap(), None)
+                    if is_mapped("?y".parse().unwrap(), None)),
+                rewrite!("neq-to-rel"; "(!= ?x ?y)" => "(rel-alu alu-neq ?x ?y)"
+                    if is_mapped("?x".parse().unwrap(), None)
+                    if is_mapped("?y".parse().unwrap(), None)),
+                rewrite!("ge-to-rel"; "(>= ?x ?y)" => "(rel-alu alu-not (rel-alu alu-lt ?x ?y))"
+                    if is_mapped("?x".parse().unwrap(), None)
+                    if is_mapped("?y".parse().unwrap(), None)),
+                rewrite!("le-to-rel"; "(<= ?x ?y)" => "(rel-alu alu-not (rel-alu alu-gt ?x ?y))"
+                    if is_mapped("?x".parse().unwrap(), None)
+                    if is_mapped("?y".parse().unwrap(), None)),
             ]
         }
     }
 
     pub mod stateful {
-        use egg::Applier;
+        use std::collections::{HashMap, HashSet};
 
-        use crate::{language::ir::MioAnalysis, rewrites::is_1_depth_mapped};
+        use egg::{Applier, Pattern};
+
+        use crate::{
+            language::ir::{ArithAluOps, MioAnalysis},
+            rewrites::{is_n_depth_mapped, merge_stateful_alus, same_elaboration},
+        };
 
         use super::*;
         pub fn conditional_assignments() -> Vec<RW> {
+            // Intel tofino switch stateful alu
+            // (stateful-alu ?r1 ?r2 ?o)
+            // where ?r1, ?r2 and ?o should be mapped to some
+            // stateful alu computations
+            // Notice that ?r1, ?r2 and ?o are also in the form of
+            // (stateful-alu ?r1' ?r2' ?o')
+            // we perform merging here if possible
+            // Tofino alu can modify two register files (?r1 and ?r2)
+            // and one PHV field (?o)
+            struct StatefulAluApplier {
+                cond_pattern: String,
+                r1: Var,
+                r2: Var,
+                o: Var,
+                r1p: Var,
+                r2p: Var,
+                op: Var,
+            }
+            impl Applier<Mio, MioAnalysis> for StatefulAluApplier {
+                fn apply_one(
+                    &self,
+                    egraph: &mut egg::EGraph<Mio, MioAnalysis>,
+                    eclass: Id,
+                    subst: &Subst,
+                    searcher_ast: Option<&egg::PatternAst<Mio>>,
+                    rule_name: egg::Symbol,
+                ) -> Vec<Id> {
+                    let o1 = subst[self.o];
+                    let o2 = subst[self.op];
+                    let r1 = subst[self.r1];
+                    let r2 = subst[self.r2];
+                    let r1p = subst[self.r1p];
+                    let r2p = subst[self.r2p];
+                    // check elaborations: ?r1 ?r2 and ?r1' ?r2'
+                    // can only elaborate to 2 global variables (each can only elaborate to 1)
+                    let r1_elab = MioAnalysis::elaborations(egraph, r1);
+                    let r2_elab = MioAnalysis::elaborations(egraph, r2);
+                    let o1_elab = MioAnalysis::elaborations(egraph, o1);
+                    let r1p_elab = MioAnalysis::elaborations(egraph, r1p);
+                    let r2p_elab = MioAnalysis::elaborations(egraph, r2p);
+                    let o2_elab = MioAnalysis::elaborations(egraph, o2);
+                    // first check each elaboration
+                    debug_assert!(r1_elab.len() <= 1);
+                    debug_assert!(r2_elab.len() <= 1);
+                    debug_assert!(o1_elab.len() <= 1);
+                    debug_assert!(r1p_elab.len() <= 1);
+                    debug_assert!(r2p_elab.len() <= 1);
+                    debug_assert!(o2_elab.len() <= 1);
+                    let elaborations_new = r1_elab
+                        .iter()
+                        .chain(r2_elab.iter())
+                        .chain(o1_elab.iter())
+                        .chain(r1p_elab.iter())
+                        .chain(r2p_elab.iter())
+                        .chain(o2_elab.iter())
+                        .cloned()
+                        .collect::<HashSet<_>>();
+                    // at most 2 registers and one PHV field
+                    if elaborations_new.len() > 3 {
+                        return vec![];
+                    }
+                    if o1_elab.union(&o2_elab).count() > 1 {
+                        return vec![];
+                    }
+                    let new_o = (self.o, self.op);
+                    let new_r1 = if r1_elab.union(&r1p_elab).count() == 1 {
+                        (self.r1, self.r1p)
+                    } else {
+                        debug_assert!(r1_elab.union(&r2p_elab).count() == 1);
+                        (self.r1, self.r2p)
+                    };
+                    let new_r2 = if r2_elab.union(&r2p_elab).count() == 1 {
+                        (self.r2, self.r2p)
+                    } else {
+                        debug_assert!(r2_elab.union(&r1p_elab).count() == 1);
+                        (self.r2, self.r1p)
+                    };
+                    let pattern = format!(
+                        "(stateful-alu
+                            (ite {} {} {})
+                            (ite {} {} {})
+                            (ite {} {} {})
+                        )",
+                        self.cond_pattern,
+                        new_r1.0,
+                        new_r1.1,
+                        self.cond_pattern,
+                        new_r2.0,
+                        new_r2.1,
+                        self.cond_pattern,
+                        new_o.0,
+                        new_o.1
+                    );
+                    pattern.parse::<Pattern<Mio>>().unwrap().apply_one(
+                        egraph,
+                        eclass,
+                        subst,
+                        searcher_ast,
+                        rule_name,
+                    )
+                }
+            }
+
             vec![
-                rewrite!("cond-to-salu-lt";
-                    "(ite (< ?lhs ?rhs) ?ib ?eb)" =>
-                        "(stateful-alu (rel-alu alu-lt ?lhs ?rhs) ?ib ?eb)"
-                        if is_1_depth_mapped("?lhs".parse().unwrap())
-                        if is_1_depth_mapped("?rhs".parse().unwrap())
-                        if is_mapped("?ib".parse().unwrap(), true)
-                        if is_mapped("?eb".parse().unwrap(), true)),
-                rewrite!("cond-to-salu-gt";
-                    "(ite (> ?lhs ?rhs) ?ib ?eb)" =>
-                        "(stateful-alu (rel-alu alu-gt ?lhs ?rhs) ?ib ?eb)"
-                        if is_1_depth_mapped("?lhs".parse().unwrap())
-                        if is_1_depth_mapped("?rhs".parse().unwrap())
-                        if is_mapped("?ib".parse().unwrap(), true)
-                        if is_mapped("?eb".parse().unwrap(), true)),
-                rewrite!("cond-to-salu-le";
-                    "(ite (<= ?lhs ?rhs) ?ib ?eb)" =>
-                        "(stateful-alu (arith-alu alu-not (rel-alu alu-gt ?lhs ?rhs)) ?ib ?eb)"
-                        if is_1_depth_mapped("?lhs".parse().unwrap())
-                        if is_1_depth_mapped("?rhs".parse().unwrap())
-                        if is_mapped("?ib".parse().unwrap(), true)
-                        if is_mapped("?eb".parse().unwrap(), true)),
-                rewrite!("cond-to-salu-ge";
-                    "(ite (>= ?lhs ?rhs) ?ib ?eb)" =>
-                        "(stateful-alu (arith-alu alu-not (rel-alu alu-lt ?lhs ?rhs)) ?ib ?eb)"
-                        if is_1_depth_mapped("?lhs".parse().unwrap())
-                        if is_1_depth_mapped("?rhs".parse().unwrap())
-                        if is_mapped("?ib".parse().unwrap(), true)
-                        if is_mapped("?eb".parse().unwrap(), true)),
-                rewrite!("cond-to-salu-eq";
-                    "(ite (= ?lhs ?rhs) ?ib ?eb)" =>
-                        "(stateful-alu (rel-alu alu-eq ?lhs ?rhs) ?ib ?eb)"
-                        if is_1_depth_mapped("?lhs".parse().unwrap())
-                        if is_1_depth_mapped("?rhs".parse().unwrap())
-                        if is_mapped("?ib".parse().unwrap(), true)
-                        if is_mapped("?eb".parse().unwrap(), true)),
-                rewrite!("cond-to-salu-neq";
-                    "(ite (!= ?lhs ?rhs) ?ib ?eb)" =>
-                        "(stateful-alu (arith-alu alu-not (rel-alu alu-eq ?lhs ?rhs)) ?ib ?eb)"
-                        if is_1_depth_mapped("?lhs".parse().unwrap())
-                        if is_1_depth_mapped("?rhs".parse().unwrap())
-                        if is_mapped("?ib".parse().unwrap(), true)
-                        if is_mapped("?eb".parse().unwrap(), true)),
+                rewrite!("cond-to-salu";
+                    "(ite (rel-alu ?cmp ?lhs ?rhs) (stateful-alu ?r1 ?r2 ?o) (stateful-alu ?r1' ?r2' ?o'))"
+                        =>
+                    { StatefulAluApplier {
+                        cond_pattern: "(rel-alu ?cmp ?lhs ?rhs)".to_string(),
+                        r1: "?r1".parse().unwrap(),
+                        r2: "?r2".parse().unwrap(),
+                        o: "?o".parse().unwrap(),
+                        r1p: "?r1'".parse().unwrap(),
+                        r2p: "?r2'".parse().unwrap(),
+                        op: "?o'".parse().unwrap(),
+                    } }
+                    if is_n_depth_mapped("?lhs".parse().unwrap(), 1, None)
+                    if is_n_depth_mapped("?rhs".parse().unwrap(), 1, None)),
+                rewrite!("cond-to-salu-unop";
+                    "(ite (rel-alu ?op (rel-alu ?cmp ?lhs ?rhs)) (stateful-alu ?r1 ?r2 ?o) (stateful-alu ?r1' ?r2' ?o'))" =>
+                    {
+                        StatefulAluApplier {
+                            cond_pattern: "(rel-alu ?op (rel-alu ?cmp ?lhs ?rhs))".to_string(),
+                            r1: "?r1".parse().unwrap(),
+                            r2: "?r2".parse().unwrap(),
+                            o: "?o".parse().unwrap(),
+                            r1p: "?r1'".parse().unwrap(),
+                            r2p: "?r2'".parse().unwrap(),
+                            op: "?o'".parse().unwrap(),
+                        }
+                    }
+                    if is_n_depth_mapped("?lhs".parse().unwrap(), 1, None)
+                    if is_n_depth_mapped("?rhs".parse().unwrap(), 1, None)),
             ]
         }
     }
@@ -470,7 +693,10 @@ mod test {
 
     use super::{
         multi_stage_action, seq_elim, split_table,
-        tofino_alus::{stateful::conditional_assignments, stateless::arith_to_alu},
+        tofino_alus::{
+            stateful::conditional_assignments,
+            stateless::{arith_to_alu, cmp_to_rel},
+        },
     };
 
     fn test_tofino_mapping(prog: Vec<Table>, filename: &'static str) {
@@ -481,6 +707,7 @@ mod test {
             .chain(arith_to_alu().into_iter())
             .chain(multi_stage_action(2).into_iter())
             .chain(conditional_assignments().into_iter())
+            .chain(cmp_to_rel().into_iter())
             .collect::<Vec<_>>();
         let runner = Runner::default()
             .with_egraph(egraph)

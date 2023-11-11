@@ -97,6 +97,7 @@ pub mod ir {
         Min,
         Not,
         Const,
+        Symbol,
         Idle,
     }
 
@@ -110,6 +111,7 @@ pub mod ir {
                 ArithAluOps::Const => write!(f, "alu-const"),
                 ArithAluOps::Not => write!(f, "alu-not"),
                 ArithAluOps::Idle => write!(f, "alu-idle"),
+                ArithAluOps::Symbol => write!(f, "alu-symbol"),
             }
         }
     }
@@ -126,6 +128,7 @@ pub mod ir {
                 "alu-const" => Ok(ArithAluOps::Const),
                 "alu-not" => Ok(ArithAluOps::Not),
                 "alu-idle" => Ok(ArithAluOps::Idle),
+                "alu-symbol" => Ok(ArithAluOps::Symbol),
                 _ => Err(()),
             }
         }
@@ -526,6 +529,14 @@ pub mod ir {
                 _ => panic!("Dataflow {:?} has no elaborations", id),
             }
         }
+
+        pub fn is_alu_op(egraph: &egg::EGraph<Mio, MioAnalysis>, id: Id, alu_op: &str) -> bool {
+            match &egraph[id].nodes[0] {
+                Mio::ArithAluOps(op) => op == &alu_op.parse().unwrap(),
+                Mio::RelAluOps(op) => op == &alu_op.parse().unwrap(),
+                _ => false,
+            }
+        }
     }
 
     #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -558,6 +569,14 @@ pub mod ir {
         fn modify(egraph: &mut egg::EGraph<Mio, Self>, id: Id) {
             // when there are constants, we can add a new node to the e-class
             // with the constant value
+            if let Mio::Symbol(sym) = &egraph[id].nodes[0] {
+                let alu_symbol = egraph.add(Mio::ArithAluOps(ArithAluOps::Symbol));
+                let sym_node = egraph.add(Mio::ArithAlu(vec![alu_symbol, id]));
+                let f = egraph.union(id, sym_node);
+                if f {
+                    egraph.rebuild();
+                }
+            }
             if let MioAnalysisData::Action(ActionAnalysis {
                 constant: Some(constant),
                 checked_type,
@@ -900,7 +919,13 @@ pub mod ir {
                         HashSet::new(),
                     )
                 }
-                Mio::ArithAluOps(_) | Mio::RelAluOps(_) => MioAnalysisData::Empty,
+                Mio::ArithAluOps(_) | Mio::RelAluOps(_) => Self::new_action_data(
+                    HashSet::new(),
+                    HashSet::new(),
+                    MioType::Unknown,
+                    None,
+                    HashSet::new(),
+                ),
                 Mio::Read([field, pre_state]) => Self::new_action_data(
                     Self::read_set(egraph, *field).clone(),
                     Self::write_set(egraph, *pre_state).clone(),
