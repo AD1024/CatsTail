@@ -405,26 +405,6 @@ fn is_n_depth_mapped(
     }
 }
 
-fn merge_stateful_alus(
-    egraph: &EGraph<Mio, MioAnalysis>,
-    u1: Vec<Id>,
-    u2: Vec<Id>,
-) -> Result<Vec<Id>, ()> {
-    u1.into_iter()
-        .zip(u2.into_iter())
-        .map(|(lhs, rhs)| {
-            let id = if MioAnalysis::is_alu_op(egraph, lhs, "alu-idle") {
-                rhs
-            } else if !MioAnalysis::is_alu_op(egraph, rhs, "alu-idle") {
-                return Err(());
-            } else {
-                lhs
-            };
-            Ok(id)
-        })
-        .collect()
-}
-
 pub mod tofino_alus {
 
     use egg::{Id, Subst};
@@ -463,7 +443,6 @@ pub mod tofino_alus {
                         .chain(reads.iter())
                         .any(|x| x.contains("global."))
                     {
-                        // format!("(stateful-alu (arith-alu {} {} {}) alu-idle alu-idle))", self.2, self.0, self.1)
                         let ops_id = egraph.add(Mio::ArithAluOps(self.0.parse().unwrap()));
                         let lhs_id = subst[self.1];
                         let rhs_id = subst[self.2];
@@ -473,9 +452,7 @@ pub mod tofino_alus {
                             MioAnalysisData::Action(u) => u.elaborations = elaborations,
                             _ => panic!("not an action when converting to a statefu alu"),
                         }
-                        let idle_ops = egraph.add(Mio::ArithAluOps("alu-idle".parse().unwrap()));
-                        let stateful_alu =
-                            egraph.add(Mio::SAlu(vec![global_update_action, idle_ops, idle_ops]));
+                        let stateful_alu = egraph.add(Mio::SAlu(vec![global_update_action]));
                         egraph.union(eclass, stateful_alu);
                         vec![eclass, global_update_action, stateful_alu]
                     } else {
@@ -538,145 +515,17 @@ pub mod tofino_alus {
 
         use crate::{
             language::ir::{ArithAluOps, MioAnalysis},
-            rewrites::{is_n_depth_mapped, merge_stateful_alus, same_elaboration},
+            rewrites::{is_n_depth_mapped, same_elaboration},
         };
 
         use super::*;
         pub fn conditional_assignments() -> Vec<RW> {
-            // Intel tofino switch stateful alu
-            // (stateful-alu ?r1 ?r2 ?o)
-            // where ?r1, ?r2 and ?o should be mapped to some
-            // stateful alu computations
-            // Notice that ?r1, ?r2 and ?o are also in the form of
-            // (stateful-alu ?r1' ?r2' ?o')
-            // we perform merging here if possible
-            // Tofino alu can modify two register files (?r1 and ?r2)
-            // and one PHV field (?o)
-            struct StatefulAluApplier {
-                cond_pattern: String,
-                r1: Var,
-                r2: Var,
-                o: Var,
-                r1p: Var,
-                r2p: Var,
-                op: Var,
-            }
-            impl Applier<Mio, MioAnalysis> for StatefulAluApplier {
-                fn apply_one(
-                    &self,
-                    egraph: &mut egg::EGraph<Mio, MioAnalysis>,
-                    eclass: Id,
-                    subst: &Subst,
-                    searcher_ast: Option<&egg::PatternAst<Mio>>,
-                    rule_name: egg::Symbol,
-                ) -> Vec<Id> {
-                    let o1 = subst[self.o];
-                    let o2 = subst[self.op];
-                    let r1 = subst[self.r1];
-                    let r2 = subst[self.r2];
-                    let r1p = subst[self.r1p];
-                    let r2p = subst[self.r2p];
-                    // check elaborations: ?r1 ?r2 and ?r1' ?r2'
-                    // can only elaborate to 2 global variables (each can only elaborate to 1)
-                    let r1_elab = MioAnalysis::elaborations(egraph, r1);
-                    let r2_elab = MioAnalysis::elaborations(egraph, r2);
-                    let o1_elab = MioAnalysis::elaborations(egraph, o1);
-                    let r1p_elab = MioAnalysis::elaborations(egraph, r1p);
-                    let r2p_elab = MioAnalysis::elaborations(egraph, r2p);
-                    let o2_elab = MioAnalysis::elaborations(egraph, o2);
-                    // first check each elaboration
-                    debug_assert!(r1_elab.len() <= 1);
-                    debug_assert!(r2_elab.len() <= 1);
-                    debug_assert!(o1_elab.len() <= 1);
-                    debug_assert!(r1p_elab.len() <= 1);
-                    debug_assert!(r2p_elab.len() <= 1);
-                    debug_assert!(o2_elab.len() <= 1);
-                    let elaborations_new = r1_elab
-                        .iter()
-                        .chain(r2_elab.iter())
-                        .chain(o1_elab.iter())
-                        .chain(r1p_elab.iter())
-                        .chain(r2p_elab.iter())
-                        .chain(o2_elab.iter())
-                        .cloned()
-                        .collect::<HashSet<_>>();
-                    // at most 2 registers and one PHV field
-                    if elaborations_new.len() > 3 {
-                        return vec![];
-                    }
-                    if o1_elab.union(&o2_elab).count() > 1 {
-                        return vec![];
-                    }
-                    let new_o = (self.o, self.op);
-                    let new_r1 = if r1_elab.union(&r1p_elab).count() == 1 {
-                        (self.r1, self.r1p)
-                    } else {
-                        debug_assert!(r1_elab.union(&r2p_elab).count() == 1);
-                        (self.r1, self.r2p)
-                    };
-                    let new_r2 = if r2_elab.union(&r2p_elab).count() == 1 {
-                        (self.r2, self.r2p)
-                    } else {
-                        debug_assert!(r2_elab.union(&r1p_elab).count() == 1);
-                        (self.r2, self.r1p)
-                    };
-                    let pattern = format!(
-                        "(stateful-alu
-                            (ite {} {} {})
-                            (ite {} {} {})
-                            (ite {} {} {})
-                        )",
-                        self.cond_pattern,
-                        new_r1.0,
-                        new_r1.1,
-                        self.cond_pattern,
-                        new_r2.0,
-                        new_r2.1,
-                        self.cond_pattern,
-                        new_o.0,
-                        new_o.1
-                    );
-                    pattern.parse::<Pattern<Mio>>().unwrap().apply_one(
-                        egraph,
-                        eclass,
-                        subst,
-                        searcher_ast,
-                        rule_name,
-                    )
-                }
-            }
-
-            vec![
-                rewrite!("cond-to-salu";
-                    "(ite (rel-alu ?cmp ?lhs ?rhs) (stateful-alu ?r1 ?r2 ?o) (stateful-alu ?r1' ?r2' ?o'))"
-                        =>
-                    { StatefulAluApplier {
-                        cond_pattern: "(rel-alu ?cmp ?lhs ?rhs)".to_string(),
-                        r1: "?r1".parse().unwrap(),
-                        r2: "?r2".parse().unwrap(),
-                        o: "?o".parse().unwrap(),
-                        r1p: "?r1'".parse().unwrap(),
-                        r2p: "?r2'".parse().unwrap(),
-                        op: "?o'".parse().unwrap(),
-                    } }
-                    if is_n_depth_mapped("?lhs".parse().unwrap(), 1, None)
-                    if is_n_depth_mapped("?rhs".parse().unwrap(), 1, None)),
-                rewrite!("cond-to-salu-unop";
-                    "(ite (rel-alu ?op (rel-alu ?cmp ?lhs ?rhs)) (stateful-alu ?r1 ?r2 ?o) (stateful-alu ?r1' ?r2' ?o'))" =>
-                    {
-                        StatefulAluApplier {
-                            cond_pattern: "(rel-alu ?op (rel-alu ?cmp ?lhs ?rhs))".to_string(),
-                            r1: "?r1".parse().unwrap(),
-                            r2: "?r2".parse().unwrap(),
-                            o: "?o".parse().unwrap(),
-                            r1p: "?r1'".parse().unwrap(),
-                            r2p: "?r2'".parse().unwrap(),
-                            op: "?o'".parse().unwrap(),
-                        }
-                    }
-                    if is_n_depth_mapped("?lhs".parse().unwrap(), 1, None)
-                    if is_n_depth_mapped("?rhs".parse().unwrap(), 1, None)),
-            ]
+            vec![rewrite!("cond-assign-to-salu";
+                    "(ite ?rel ?lhs ?rhs)" =>
+                    "(stateful-alu (ite ?rel ?lhs ?rhs))"
+                if is_n_depth_mapped("?rel".parse().unwrap(), 2, None)
+                if is_n_depth_mapped("?lhs".parse().unwrap(), 1, None)
+                if is_n_depth_mapped("?rhs".parse().unwrap(), 1, None))]
         }
     }
 }
