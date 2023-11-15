@@ -31,9 +31,7 @@ pub mod ir {
             "rel-alu" = RelAlu(Vec<Id>),
             // syntax differs across backends
             // e.g. Intel tofino supports three outputs (with one modification to PHV)
-            // (stateful-alu ?r1 ?r2 ?o) where ?r1 and ?r2 are outputs to registers
-            // and ?o is the output to the PHV
-            // each output is tagged with their corresponding elaborated fields
+            // (stateful-alu ?op ?dst ?src1 ?src2 ... ?src_n)
             "stateful-alu" = SAlu(Vec<Id>),
             // Logical operators
             "land" = LAnd([Id; 2]),
@@ -97,7 +95,8 @@ pub mod ir {
         Min,
         Not,
         Const,
-        Symbol,
+        LocalSymbol,
+        GlobalSymbol,
         Idle,
     }
 
@@ -111,7 +110,8 @@ pub mod ir {
                 ArithAluOps::Const => write!(f, "alu-const"),
                 ArithAluOps::Not => write!(f, "alu-not"),
                 ArithAluOps::Idle => write!(f, "alu-idle"),
-                ArithAluOps::Symbol => write!(f, "alu-symbol"),
+                ArithAluOps::LocalSymbol => write!(f, "alu-local"),
+                ArithAluOps::GlobalSymbol => write!(f, "alu-global"),
             }
         }
     }
@@ -128,7 +128,8 @@ pub mod ir {
                 "alu-const" => Ok(ArithAluOps::Const),
                 "alu-not" => Ok(ArithAluOps::Not),
                 "alu-idle" => Ok(ArithAluOps::Idle),
-                "alu-symbol" => Ok(ArithAluOps::Symbol),
+                "alu-local" => Ok(ArithAluOps::LocalSymbol),
+                "alu-global" => Ok(ArithAluOps::GlobalSymbol),
                 _ => Err(()),
             }
         }
@@ -142,6 +143,7 @@ pub mod ir {
         Le,
         Ge,
         Neq,
+        Ite,
     }
 
     impl Display for RelAluOps {
@@ -153,6 +155,7 @@ pub mod ir {
                 RelAluOps::Le => write!(f, "alu-le"),
                 RelAluOps::Ge => write!(f, "alu-ge"),
                 RelAluOps::Neq => write!(f, "alu-neq"),
+                RelAluOps::Ite => write!(f, "alu-ite"),
             }
         }
     }
@@ -168,6 +171,7 @@ pub mod ir {
                 "alu-le" => Ok(RelAluOps::Le),
                 "alu-ge" => Ok(RelAluOps::Ge),
                 "alu-neq" => Ok(RelAluOps::Neq),
+                "alu-ite" => Ok(RelAluOps::Ite),
                 _ => Err(()),
             }
         }
@@ -376,6 +380,7 @@ pub mod ir {
     pub struct MioAnalysis {
         context: HashMap<String, Constant>,
         gamma: HashMap<String, MioType>,
+        var_counter: usize,
     }
 
     impl Default for MioAnalysis {
@@ -383,6 +388,7 @@ pub mod ir {
             MioAnalysis {
                 context: HashMap::new(),
                 gamma: HashMap::new(),
+                var_counter: 0,
             }
         }
     }
@@ -392,7 +398,15 @@ pub mod ir {
             MioAnalysis {
                 context: ctx,
                 gamma,
+                var_counter: 0,
             }
+        }
+
+        pub fn new_var(&mut self, ty: MioType) -> String {
+            let result = format!("var_{}", self.var_counter);
+            self.gamma.insert(result.clone(), ty);
+            self.var_counter += 1;
+            return result;
         }
 
         pub fn type_unification(lhs_ty: &MioType, rhs_ty: &MioType) -> MioType {
@@ -570,7 +584,11 @@ pub mod ir {
             // when there are constants, we can add a new node to the e-class
             // with the constant value
             if let Mio::Symbol(sym) = &egraph[id].nodes[0] {
-                let alu_symbol = egraph.add(Mio::ArithAluOps(ArithAluOps::Symbol));
+                let alu_symbol = if sym.starts_with("global.") {
+                    egraph.add(Mio::ArithAluOps(ArithAluOps::GlobalSymbol))
+                } else {
+                    egraph.add(Mio::ArithAluOps(ArithAluOps::LocalSymbol))
+                };
                 let sym_node = egraph.add(Mio::ArithAlu(vec![alu_symbol, id]));
                 let f = egraph.union(id, sym_node);
                 if f {
@@ -948,7 +966,11 @@ pub mod ir {
                     )
                 }
                 Mio::Symbol(sym) => Self::new_action_data(
-                    HashSet::from([sym.clone()]),
+                    if sym.contains(".") {
+                        HashSet::from([sym.clone()])
+                    } else {
+                        HashSet::new()
+                    },
                     HashSet::new(),
                     if egraph.analysis.gamma.contains_key(sym) {
                         egraph.analysis.gamma[sym].clone()

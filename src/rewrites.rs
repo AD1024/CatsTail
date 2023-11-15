@@ -444,20 +444,29 @@ impl Applier<Mio, MioAnalysis> for AluApplier {
             } else {
                 Mio::RelAluOps(self.alu_op.parse().unwrap())
             });
+            let evar = if elaborations.len() > 0 {
+                elaborations
+                    .iter()
+                    .filter(|x| x.contains("global."))
+                    .next()
+                    .unwrap()
+                    .clone()
+            } else {
+                "tmp".to_string()
+            };
+            let var_id = egraph.add(Mio::Symbol(evar));
             let operands = self.operands.iter().map(|v| subst[*v]).collect::<Vec<_>>();
-            let global_update_action = egraph.add(Mio::ArithAlu(
-                vec![ops_id]
+            // TODO: Notice that we are not enforcing depth limit to the operands.
+            // We will need to limit it because it cannot have unbounded depth
+            // e.g. Intel Tofino can only do depth 2
+            let stateful_alu = egraph.add(Mio::SAlu(
+                vec![ops_id, var_id]
                     .into_iter()
                     .chain(operands.into_iter())
                     .collect(),
             ));
-            match &mut egraph[global_update_action].data {
-                MioAnalysisData::Action(u) => u.elaborations = elaborations,
-                _ => panic!("not an action when converting to a statefu alu"),
-            }
-            let stateful_alu = egraph.add(Mio::SAlu(vec![global_update_action]));
             egraph.union(eclass, stateful_alu);
-            vec![eclass, global_update_action, stateful_alu]
+            vec![eclass, stateful_alu]
         } else {
             let pattern = format!(
                 "({} {} {})",
@@ -484,7 +493,7 @@ pub mod tofino_alus {
     use super::{constains_leaf, is_mapped, rewrite, Var, EG, RW};
 
     pub mod stateless {
-        use egg::{Applier, Pattern};
+        use egg::{Applier, Language, Pattern, Searcher};
 
         use crate::{
             language::ir::{MioAnalysis, MioAnalysisData},
@@ -492,6 +501,69 @@ pub mod tofino_alus {
         };
 
         use super::*;
+
+        pub fn lift_stateless() -> Vec<RW> {
+            // If the elaboration of some computation is a global variable,
+            // and the computation requires reading that global variable, e.g. global.x = global.x + (meta.y + meta.z)
+            // then we could lift (meta.y + meta.z) to a previous stage
+            // When such computation has a depth >= 2, we must lift it to a previous stage, otherwise we cannot compile it.
+            struct StatelessLiftApplier(Var, Var);
+            impl Applier<Mio, MioAnalysis> for StatelessLiftApplier {
+                fn apply_one(
+                    &self,
+                    egraph: &mut egg::EGraph<Mio, MioAnalysis>,
+                    eclass: Id,
+                    subst: &Subst,
+                    searcher_ast: Option<&egg::PatternAst<Mio>>,
+                    rule_name: egg::Symbol,
+                ) -> Vec<Id> {
+                    // First check whether in each action there is an elaboration that involves
+                    // both reading and writing to a global variable
+                    let keys = subst[self.0];
+                    let action_wrapper_id = subst[self.1];
+                    // let mut lhs_action_elabs = vec![];
+                    // let mut rhs_action_elabs = vec![];
+                    for action_wrapper in egraph[action_wrapper_id].nodes.iter() {
+                        for &elab_wrapper_id in action_wrapper.children() {
+                            for elab_node in egraph[elab_wrapper_id].nodes.iter() {
+                                // let mut remain = vec![];
+                                // let mut lifted = vec![];
+                                for &action_elaborations in elab_node.children() {
+                                    let elaborations =
+                                        MioAnalysis::elaborations(egraph, action_elaborations);
+                                    let read_set =
+                                        MioAnalysis::read_set(egraph, action_elaborations);
+                                    if elaborations.intersection(read_set).next().is_none() {
+                                        // no read-write global variable
+                                        continue;
+                                    }
+                                    // we will need to check whether this elaboration has a match in the form of
+                                    // (?op ?x ?y) where ?x or ?y is a global variable
+                                    let pattern = "(?op (arith-alu alu-global ?x) ?y)"
+                                        .parse::<Pattern<Mio>>()
+                                        .unwrap();
+                                    if let Some(matches) =
+                                        pattern.search_eclass(egraph, action_elaborations)
+                                    {
+                                        // split ?y to some previous stage and replace with a new PHV field
+                                        // let new_subst = matches.substs[0];
+                                        // let to_lift = new_subst["?y".parse().unwrap()];
+                                        todo!("Need to first implement per-table read/write/elaboration analysis")
+                                    }
+                                }
+                            }
+                            break;
+                        }
+                        // we can break here because all the actions should have the same elaboration
+                        break;
+                    }
+                    vec![]
+                }
+            }
+            vec![rewrite!("lift-comp";
+                    "(gite ?keys ?actions)" =>
+                    {  StatelessLiftApplier("?keys".parse().unwrap(), "?actions".parse().unwrap()) })]
+        }
 
         pub fn arith_to_alu() -> Vec<RW> {
             vec![
@@ -540,15 +612,68 @@ pub mod tofino_alus {
         use egg::{Applier, Pattern};
 
         use crate::{
-            language::ir::{ArithAluOps, MioAnalysis},
+            language::ir::{ArithAluOps, MioAnalysis, MioAnalysisData},
             rewrites::{is_n_depth_mapped, same_elaboration},
         };
 
         use super::*;
         pub fn conditional_assignments() -> Vec<RW> {
+            struct TofinoStatefulAluApplier {
+                alu_op: &'static str,
+                operands: Vec<Var>,
+            }
+            impl TofinoStatefulAluApplier {
+                fn new(alu_op: &'static str, operands: Vec<&'static str>) -> Self {
+                    Self {
+                        alu_op,
+                        operands: operands.into_iter().map(|s| s.parse().unwrap()).collect(),
+                    }
+                }
+            }
+            impl Applier<Mio, MioAnalysis> for TofinoStatefulAluApplier {
+                fn apply_one(
+                    &self,
+                    egraph: &mut egg::EGraph<Mio, MioAnalysis>,
+                    eclass: Id,
+                    subst: &Subst,
+                    searcher_ast: Option<&egg::PatternAst<Mio>>,
+                    rule_name: egg::Symbol,
+                ) -> Vec<Id> {
+                    let elaborations = match &egraph[eclass].data {
+                        MioAnalysisData::Action(u) => u.elaborations.clone(),
+                        _ => panic!("not an action"),
+                    };
+                    assert!(
+                        elaborations.len() <= 1,
+                        "conditional assignments should have at most one elaboration"
+                    );
+                    let elab_var = if elaborations.len() == 0 {
+                        "tmp".to_string()
+                    } else {
+                        elaborations.iter().cloned().next().unwrap()
+                    };
+                    let pattern = format!(
+                        "(stateful-alu {} {} {})",
+                        self.alu_op,
+                        elab_var,
+                        self.operands
+                            .iter()
+                            .map(|x| x.to_string())
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    );
+                    pattern.parse::<Pattern<Mio>>().unwrap().apply_one(
+                        egraph,
+                        eclass,
+                        subst,
+                        searcher_ast,
+                        rule_name,
+                    )
+                }
+            }
             vec![rewrite!("cond-assign-to-salu";
                     "(ite ?rel ?lhs ?rhs)" =>
-                    "(stateful-alu (ite ?rel ?lhs ?rhs))"
+                    { TofinoStatefulAluApplier::new("alu-ite", vec!["?rel", "?lhs", "?rhs"]) }
                 if is_n_depth_mapped("?rel".parse().unwrap(), 2, None)
                 if is_n_depth_mapped("?lhs".parse().unwrap(), 1, None)
                 if is_n_depth_mapped("?rhs".parse().unwrap(), 1, None))]
