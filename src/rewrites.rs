@@ -2,7 +2,7 @@ use egg::{rewrite, Applier, EGraph, Id, Language, Pattern, Rewrite, Searcher, Su
 
 use crate::language::{
     self,
-    ir::{Constant, Mio, MioAnalysis, MioAnalysisData},
+    ir::{ArithAluOps, Constant, Mio, MioAnalysis, MioAnalysisData},
     utils::{get_dependency, Dependency},
 };
 
@@ -405,6 +405,76 @@ fn is_n_depth_mapped(
     }
 }
 
+struct AluApplier {
+    alu_type: &'static str,
+    alu_op: &'static str,
+    operands: Vec<Var>,
+}
+
+impl AluApplier {
+    fn new(alu_type: &'static str, alu_op: &'static str, operands: Vec<&'static str>) -> Self {
+        Self {
+            alu_type,
+            alu_op,
+            operands: operands.into_iter().map(|s| s.parse().unwrap()).collect(),
+        }
+    }
+}
+
+impl Applier<Mio, MioAnalysis> for AluApplier {
+    fn apply_one(
+        &self,
+        egraph: &mut egg::EGraph<Mio, MioAnalysis>,
+        eclass: Id,
+        subst: &Subst,
+        searcher_ast: Option<&egg::PatternAst<Mio>>,
+        rule_name: egg::Symbol,
+    ) -> Vec<Id> {
+        let (elaborations, reads) = match &egraph[eclass].data {
+            MioAnalysisData::Action(u) => (u.elaborations.clone(), u.reads.clone()),
+            _ => panic!("not an action"),
+        };
+        if elaborations
+            .iter()
+            .chain(reads.iter())
+            .any(|x| x.contains("global."))
+        {
+            let ops_id = egraph.add(if self.alu_type == "arith-alu" {
+                Mio::ArithAluOps(self.alu_op.parse().unwrap())
+            } else {
+                Mio::RelAluOps(self.alu_op.parse().unwrap())
+            });
+            let operands = self.operands.iter().map(|v| subst[*v]).collect::<Vec<_>>();
+            let global_update_action = egraph.add(Mio::ArithAlu(
+                vec![ops_id]
+                    .into_iter()
+                    .chain(operands.into_iter())
+                    .collect(),
+            ));
+            match &mut egraph[global_update_action].data {
+                MioAnalysisData::Action(u) => u.elaborations = elaborations,
+                _ => panic!("not an action when converting to a statefu alu"),
+            }
+            let stateful_alu = egraph.add(Mio::SAlu(vec![global_update_action]));
+            egraph.union(eclass, stateful_alu);
+            vec![eclass, global_update_action, stateful_alu]
+        } else {
+            let pattern = format!(
+                "({} {} {})",
+                self.alu_type,
+                self.alu_op,
+                self.operands
+                    .iter()
+                    .map(|x| x.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            );
+            let pattern = pattern.parse::<Pattern<Mio>>().unwrap();
+            pattern.apply_one(egraph, eclass, subst, searcher_ast, rule_name)
+        }
+    }
+}
+
 pub mod tofino_alus {
 
     use egg::{Id, Subst};
@@ -418,69 +488,25 @@ pub mod tofino_alus {
 
         use crate::{
             language::ir::{MioAnalysis, MioAnalysisData},
-            rewrites::none_global,
+            rewrites::{none_global, AluApplier},
         };
 
         use super::*;
 
         pub fn arith_to_alu() -> Vec<RW> {
-            struct ArithToAluApplier(&'static str, Var, Var);
-            impl Applier<Mio, MioAnalysis> for ArithToAluApplier {
-                fn apply_one(
-                    &self,
-                    egraph: &mut egg::EGraph<Mio, MioAnalysis>,
-                    eclass: Id,
-                    subst: &Subst,
-                    searcher_ast: Option<&egg::PatternAst<Mio>>,
-                    rule_name: egg::Symbol,
-                ) -> Vec<Id> {
-                    let (elaborations, reads) = match &egraph[eclass].data {
-                        MioAnalysisData::Action(u) => (u.elaborations.clone(), u.reads.clone()),
-                        _ => panic!("not an action"),
-                    };
-                    if elaborations
-                        .iter()
-                        .chain(reads.iter())
-                        .any(|x| x.contains("global."))
-                    {
-                        let ops_id = egraph.add(Mio::ArithAluOps(self.0.parse().unwrap()));
-                        let lhs_id = subst[self.1];
-                        let rhs_id = subst[self.2];
-                        let global_update_action =
-                            egraph.add(Mio::ArithAlu(vec![ops_id, lhs_id, rhs_id]));
-                        match &mut egraph[global_update_action].data {
-                            MioAnalysisData::Action(u) => u.elaborations = elaborations,
-                            _ => panic!("not an action when converting to a statefu alu"),
-                        }
-                        let stateful_alu = egraph.add(Mio::SAlu(vec![global_update_action]));
-                        egraph.union(eclass, stateful_alu);
-                        vec![eclass, global_update_action, stateful_alu]
-                    } else {
-                        let pattern = format!("(arith-alu {} {} {})", self.2, self.0, self.1);
-                        let pattern = pattern.parse::<Pattern<Mio>>().unwrap();
-                        pattern.apply_one(egraph, eclass, subst, searcher_ast, rule_name)
-                    }
-                }
-            }
             vec![
-                rewrite!("add-to-alu-leaf"; "(+ ?x ?y)" => { ArithToAluApplier("alu-add", "?x".parse().unwrap(), "?y".parse().unwrap()) }
-                    if constains_leaf("?x".parse().unwrap())
-                    if constains_leaf("?y".parse().unwrap())),
-                rewrite!("alu-add-tree";
-                    "(+ (arith-alu ?op1 ?x1 ?y1) (arith-alu ?op2 ?x2 ?y2))" =>
-                    "(arith-alu alu-add (arith-alu ?op1 ?x1 ?x2) (arith-alu ?op2 ?y1 ?y2))"),
-                rewrite!("minus-to-alu-leaf"; "(- ?x ?y)" => { ArithToAluApplier("alu-sub", "?x".parse().unwrap(), "?y".parse().unwrap()) }
-                    if constains_leaf("?x".parse().unwrap())
-                    if constains_leaf("?y".parse().unwrap())),
-                rewrite!("minus-to-alu-tree";
-                    "(- (arith-alu ?op1 ?x1 ?y1) (arith-alu ?op2 ?x2 ?y2))" =>
-                    "(arith-alu alu-sub (arith-alu ?op1 ?x1 ?x2) (arith-alu ?op2 ?y1 ?y2))"),
-                rewrite!("ite-to-max"; "(ite (> ?x ?y) ?x ?y)" => { ArithToAluApplier("alu-max", "?x".parse().unwrap(), "?y".parse().unwrap()) }
-                    if is_mapped("?x".parse().unwrap(), Some(false))
-                    if is_mapped("?y".parse().unwrap(), Some(false))),
-                rewrite!("ite-to-min"; "(ite (< ?x ?y) ?x ?y)" => { ArithToAluApplier("alu-min", "?x".parse().unwrap(), "?y".parse().unwrap()) }
-                    if is_mapped("?x".parse().unwrap(), Some(false))
-                    if is_mapped("?y".parse().unwrap(), Some(false))),
+                rewrite!("add-to-alu"; "(+ ?x ?y)" => { AluApplier::new("arith-alu", "alu-add", vec!["?x", "?y"]) }
+                    if is_mapped("?x".parse().unwrap(), None)
+                    if is_mapped("?y".parse().unwrap(), None)),
+                rewrite!("minus-to-alu"; "(- ?x ?y)" => { AluApplier::new("arith-alu", "alu-sub", vec!["?x", "?y"]) }
+                    if is_mapped("?x".parse().unwrap(), None)
+                    if is_mapped("?y".parse().unwrap(), None)),
+                rewrite!("ite-to-max"; "(ite (> ?x ?y) ?x ?y)" => { AluApplier::new("arith-alu", "alu-max", vec!["?x", "?y"]) }
+                    if is_mapped("?x".parse().unwrap(), None)
+                    if is_mapped("?y".parse().unwrap(), None)),
+                rewrite!("ite-to-min"; "(ite (< ?x ?y) ?x ?y)" => { AluApplier::new("arith-min", "alu-add", vec!["?x", "?y"]) }
+                    if is_mapped("?x".parse().unwrap(), None)
+                    if is_mapped("?y".parse().unwrap(), None)),
             ]
         }
 
@@ -526,6 +552,44 @@ pub mod tofino_alus {
                 if is_n_depth_mapped("?rel".parse().unwrap(), 2, None)
                 if is_n_depth_mapped("?lhs".parse().unwrap(), 1, None)
                 if is_n_depth_mapped("?rhs".parse().unwrap(), 1, None))]
+        }
+    }
+}
+
+pub mod banzai_alu {
+    pub mod stateless {
+        use egg::rewrite;
+
+        use crate::rewrites::{is_mapped, AluApplier, RW};
+
+        pub fn arith_to_alu() -> Vec<RW> {
+            // https://github.com/CaT-mindepth/minDepthCompiler/blob/weighted-grammar-parallel-final/src/grammars/stateless_domino/stateless_new.sk
+            vec![
+                rewrite!("domino-add";
+                    "(+ ?x ?y)" => { AluApplier::new("arith-alu", "alu-add", vec!["?x", "?y"]) }
+                    if is_mapped("?x".parse().unwrap(), None)
+                    if is_mapped("?y".parse().unwrap(), None)),
+                rewrite!("domino-sub";
+                    "(- ?x ?y)" => { AluApplier::new("arith-alu", "alu-sub", vec!["?x", "?y"]) }
+                    if is_mapped("?x".parse().unwrap(), None)
+                    if is_mapped("?y".parse().unwrap(), None)),
+                rewrite!("domino-neq";
+                    "(!= ?x ?y)" => { AluApplier::new("rel-alu", "alu-neq", vec!["?x", "?y"]) }
+                    if is_mapped("?x".parse().unwrap(), None)
+                    if is_mapped("?y".parse().unwrap(), None)),
+                rewrite!("domino-neq";
+                    "(= ?x ?y)" => { AluApplier::new("rel-alu", "alu-eq", vec!["?x", "?y"]) }
+                    if is_mapped("?x".parse().unwrap(), None)
+                    if is_mapped("?y".parse().unwrap(), None)),
+                rewrite!("domino-geq";
+                    "(>= ?x ?y)" => { AluApplier::new("rel-alu", "alu-ge", vec!["?x", "?y"]) }
+                    if is_mapped("?x".parse().unwrap(), None)
+                    if is_mapped("?y".parse().unwrap(), None)),
+                rewrite!("domino-lt";
+                    "(< ?x ?y)" => { AluApplier::new("rel-alu", "alu-lt", vec!["?x", "?y"]) }
+                    if is_mapped("?x".parse().unwrap(), None)
+                    if is_mapped("?y".parse().unwrap(), None)),
+            ]
         }
     }
 }
