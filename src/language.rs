@@ -98,6 +98,7 @@ pub mod ir {
         LocalSymbol,
         GlobalSymbol,
         Idle,
+        Ite,
     }
 
     impl Display for ArithAluOps {
@@ -112,6 +113,7 @@ pub mod ir {
                 ArithAluOps::Idle => write!(f, "alu-idle"),
                 ArithAluOps::LocalSymbol => write!(f, "alu-local"),
                 ArithAluOps::GlobalSymbol => write!(f, "alu-global"),
+                ArithAluOps::Ite => write!(f, "alu-ite"),
             }
         }
     }
@@ -130,6 +132,7 @@ pub mod ir {
                 "alu-idle" => Ok(ArithAluOps::Idle),
                 "alu-local" => Ok(ArithAluOps::LocalSymbol),
                 "alu-global" => Ok(ArithAluOps::GlobalSymbol),
+                "alu-ite" => Ok(ArithAluOps::Ite),
                 _ => Err(()),
             }
         }
@@ -143,7 +146,6 @@ pub mod ir {
         Le,
         Ge,
         Neq,
-        Ite,
     }
 
     impl Display for RelAluOps {
@@ -155,7 +157,6 @@ pub mod ir {
                 RelAluOps::Le => write!(f, "alu-le"),
                 RelAluOps::Ge => write!(f, "alu-ge"),
                 RelAluOps::Neq => write!(f, "alu-neq"),
-                RelAluOps::Ite => write!(f, "alu-ite"),
             }
         }
     }
@@ -171,7 +172,6 @@ pub mod ir {
                 "alu-le" => Ok(RelAluOps::Le),
                 "alu-ge" => Ok(RelAluOps::Ge),
                 "alu-neq" => Ok(RelAluOps::Neq),
-                "alu-ite" => Ok(RelAluOps::Ite),
                 _ => Err(()),
             }
         }
@@ -1325,7 +1325,7 @@ pub mod transforms {
         (recexpr, built, reads, writes)
     }
 
-    pub fn tables_to_egraph(mut tables: Vec<Table>) -> EGraph<Mio, MioAnalysis> {
+    pub fn tables_to_egraph(mut tables: Vec<Table>) -> (EGraph<Mio, MioAnalysis>, Id) {
         let mut egraph = EGraph::<Mio, MioAnalysis>::default();
         let mut table_ids = vec![];
         while let Some(table) = tables.pop() {
@@ -1379,7 +1379,7 @@ pub mod transforms {
                 table_ids.push(seq_id);
             }
         }
-        return egraph;
+        return (egraph, table_ids.pop().unwrap());
     }
 }
 

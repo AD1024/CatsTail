@@ -12,10 +12,21 @@ impl CostFunction<Mio> for GreedyExtractor {
     {
         // AstDepth with exception that `join` operators are considered not
         // increasing the depth of the tree.
-        let base = match enode {
+        let base: usize = match enode {
             Mio::Join(_) => 0,
-            _ => 1,
+            Mio::ArithAlu(_) | Mio::RelAlu(_) | Mio::SAlu(_) => 1,
+            Mio::ArithAluOps(_) | Mio::RelAluOps(_) => 0,
+            Mio::Ite(_) => 1,
+            Mio::GIte(_) => 1,
+            Mio::Actions(_) => 1,
+            Mio::Elaborations(_) => 1,
+            Mio::Keys(_) => 1,
+            Mio::Seq(_) => 1,
+            Mio::Symbol(_) => 0,
+            Mio::Constant(_) => 0,
+            _ => usize::MAX,
         };
-        base + enode.fold(0, |max, id| max.max(costs(id)))
+        let child_cost = enode.fold(0, |max, id| max.max(costs(id)));
+        base.saturating_add(child_cost)
     }
 }

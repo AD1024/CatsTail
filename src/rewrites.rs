@@ -497,7 +497,7 @@ pub mod tofino_alus {
 
         use crate::{
             language::ir::{MioAnalysis, MioAnalysisData},
-            rewrites::{none_global, AluApplier},
+            rewrites::{is_n_depth_mapped, none_global, AluApplier},
         };
 
         use super::*;
@@ -521,13 +521,25 @@ pub mod tofino_alus {
                     // both reading and writing to a global variable
                     let keys = subst[self.0];
                     let action_wrapper_id = subst[self.1];
-                    // let mut lhs_action_elabs = vec![];
-                    // let mut rhs_action_elabs = vec![];
-                    for action_wrapper in egraph[action_wrapper_id].nodes.iter() {
+                    let mut lhs_action_elabs = vec![];
+                    let mut rhs_action_elabs = vec![];
+                    let mut changed: Vec<Id> = vec![];
+                    // copy to avoid holding mut and immut references
+                    for action_wrapper in egraph[action_wrapper_id]
+                        .nodes
+                        .iter()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                    {
                         for &elab_wrapper_id in action_wrapper.children() {
-                            for elab_node in egraph[elab_wrapper_id].nodes.iter() {
-                                // let mut remain = vec![];
-                                // let mut lifted = vec![];
+                            for elab_node in egraph[elab_wrapper_id]
+                                .nodes
+                                .iter()
+                                .cloned()
+                                .collect::<Vec<_>>()
+                            {
+                                let mut remain = vec![];
+                                let mut lifted = vec![];
                                 for &action_elaborations in elab_node.children() {
                                     let elaborations =
                                         MioAnalysis::elaborations(egraph, action_elaborations);
@@ -539,25 +551,124 @@ pub mod tofino_alus {
                                     }
                                     // we will need to check whether this elaboration has a match in the form of
                                     // (?op ?x ?y) where ?x or ?y is a global variable
-                                    let pattern = "(?op (arith-alu alu-global ?x) ?y)"
-                                        .parse::<Pattern<Mio>>()
-                                        .unwrap();
-                                    if let Some(matches) =
-                                        pattern.search_eclass(egraph, action_elaborations)
-                                    {
-                                        // split ?y to some previous stage and replace with a new PHV field
-                                        // let new_subst = matches.substs[0];
-                                        // let to_lift = new_subst["?y".parse().unwrap()];
-                                        todo!("Need to first implement per-table read/write/elaboration analysis")
+                                    for op in ["+", "-"] {
+                                        let pattern_l =
+                                            format!("({} (arith-alu alu-global ?x) ?y)", op)
+                                                .parse::<Pattern<Mio>>()
+                                                .unwrap();
+                                        let pattern_r =
+                                            format!("({} ?y (arith-alu alu-global ?x))", op)
+                                                .parse::<Pattern<Mio>>()
+                                                .unwrap();
+                                        egraph.rebuild();
+                                        let search_left =
+                                            pattern_l.search_eclass(egraph, action_elaborations);
+                                        let search_right =
+                                            pattern_r.search_eclass(egraph, action_elaborations);
+                                        let hit_left = search_left.is_some();
+                                        if let Some(matches) = search_left.or(search_right) {
+                                            // split ?y to some previous stage and replace with a new PHV field
+                                            let new_subst = &matches.substs[0];
+                                            let pattern_var = "?y".parse().unwrap();
+                                            if is_n_depth_mapped(pattern_var, 1, Some(false))(
+                                                egraph,
+                                                new_subst[pattern_var],
+                                                new_subst,
+                                            ) {
+                                                // if it is at most depth 1 computation on stateless alu, we don't need to lift it
+                                                remain.push(action_elaborations);
+                                                continue;
+                                            }
+                                            if !is_mapped(pattern_var, Some(false))(
+                                                egraph,
+                                                action_elaborations,
+                                                new_subst,
+                                            ) {
+                                                // if it is not mapped to stateless alus, we can't lift it
+                                                remain.push(action_elaborations);
+                                                continue;
+                                            }
+                                            let to_lift = new_subst[pattern_var];
+                                            let binding = egraph
+                                                .analysis
+                                                .new_var(MioAnalysis::get_type(egraph, to_lift));
+                                            let _binding_id =
+                                                egraph.add(Mio::Symbol(binding.clone()));
+                                            // remaining computation should be (op ?x ?binding) / (op ?binding ?x)
+                                            let pattern_str = if hit_left {
+                                                format!(
+                                                    "({} (arith-alu alu-global ?x) ?binding)",
+                                                    op
+                                                )
+                                            } else {
+                                                format!(
+                                                    "({} ?binding (arith-alu alu-global ?x))",
+                                                    op
+                                                )
+                                            };
+                                            let new_pattern =
+                                                pattern_str.parse::<Pattern<Mio>>().unwrap();
+                                            let new_action_elaborations = new_pattern.apply_one(
+                                                egraph,
+                                                action_elaborations,
+                                                new_subst,
+                                                searcher_ast,
+                                                rule_name,
+                                            );
+                                            changed.extend(new_action_elaborations.iter());
+                                            remain.push(new_action_elaborations[0]);
+                                            lifted.push((to_lift, binding));
+                                        } else {
+                                            remain.push(action_elaborations);
+                                        }
                                     }
+                                }
+                                if lifted.len() > 0 {
+                                    lhs_action_elabs.push(lifted);
+                                }
+                                if remain.len() > 0 {
+                                    rhs_action_elabs.push(remain);
                                 }
                             }
                             break;
                         }
-                        // we can break here because all the actions should have the same elaboration
-                        break;
                     }
-                    vec![]
+                    if lhs_action_elabs.len() == 0 {
+                        vec![]
+                    } else {
+                        // construct new table
+                        for lhs_action_elab in lhs_action_elabs.iter() {
+                            for (to_lift, binding) in lhs_action_elab {
+                                match &mut egraph[*to_lift].data {
+                                    MioAnalysisData::Action(u) => {
+                                        u.elaborations.insert(binding.clone())
+                                    }
+                                    _ => panic!("not an action"),
+                                };
+                            }
+                        }
+                        let elab_ids = lhs_action_elabs
+                            .iter()
+                            .map(|v| {
+                                egraph.add(Mio::Elaborations(v.iter().map(|(id, _)| *id).collect()))
+                            })
+                            .collect();
+                        let action_id = egraph.add(Mio::Actions(elab_ids));
+                        let lhs_table_id = egraph.add(Mio::GIte([keys, action_id]));
+                        let elab_ids = rhs_action_elabs
+                            .iter()
+                            .map(|v| {
+                                egraph.add(Mio::Elaborations(v.iter().map(|id| *id).collect()))
+                            })
+                            .collect();
+                        let action_id = egraph.add(Mio::Actions(elab_ids));
+                        let rhs_table_id = egraph.add(Mio::GIte([keys, action_id]));
+                        let seq_id = egraph.add(Mio::Seq([lhs_table_id, rhs_table_id]));
+                        vec![seq_id]
+                            .into_iter()
+                            .chain(changed.into_iter())
+                            .collect()
+                    }
                 }
             }
             vec![rewrite!("lift-comp";
@@ -619,12 +730,18 @@ pub mod tofino_alus {
         use super::*;
         pub fn conditional_assignments() -> Vec<RW> {
             struct TofinoStatefulAluApplier {
+                alu_type: &'static str,
                 alu_op: &'static str,
                 operands: Vec<Var>,
             }
             impl TofinoStatefulAluApplier {
-                fn new(alu_op: &'static str, operands: Vec<&'static str>) -> Self {
+                fn new(
+                    alu_type: &'static str,
+                    alu_op: &'static str,
+                    operands: Vec<&'static str>,
+                ) -> Self {
                     Self {
+                        alu_type,
                         alu_op,
                         operands: operands.into_iter().map(|s| s.parse().unwrap()).collect(),
                     }
@@ -652,28 +769,41 @@ pub mod tofino_alus {
                     } else {
                         elaborations.iter().cloned().next().unwrap()
                     };
-                    let pattern = format!(
-                        "(stateful-alu {} {} {})",
-                        self.alu_op,
-                        elab_var,
-                        self.operands
-                            .iter()
-                            .map(|x| x.to_string())
-                            .collect::<Vec<_>>()
-                            .join(" ")
-                    );
-                    pattern.parse::<Pattern<Mio>>().unwrap().apply_one(
-                        egraph,
-                        eclass,
-                        subst,
-                        searcher_ast,
-                        rule_name,
-                    )
+                    let read_set = MioAnalysis::read_set(egraph, eclass).clone();
+                    let write_set = MioAnalysis::write_set(egraph, eclass).clone();
+                    let elaborations = MioAnalysis::elaborations(egraph, eclass).clone();
+                    let alu_op_id = egraph.add(if self.alu_type == "arith-alu" {
+                        Mio::ArithAluOps(self.alu_op.parse().unwrap())
+                    } else {
+                        Mio::RelAluOps(self.alu_op.parse().unwrap())
+                    });
+                    let operands = self.operands.iter().map(|v| subst[*v]).collect::<Vec<_>>();
+                    let elab_id = egraph.add(Mio::Symbol(elab_var.clone()));
+                    let salu_id = egraph.add(Mio::SAlu(
+                        vec![alu_op_id, elab_id]
+                            .into_iter()
+                            .chain(operands.iter().cloned())
+                            .collect(),
+                    ));
+                    match &mut egraph[salu_id].data {
+                        MioAnalysisData::Action(u) => {
+                            u.reads = read_set;
+                            u.writes = write_set;
+                            u.elaborations = elaborations;
+                        }
+                        _ => (),
+                    }
+                    let f = egraph.union(salu_id, eclass);
+                    if f {
+                        vec![eclass, salu_id]
+                    } else {
+                        vec![]
+                    }
                 }
             }
             vec![rewrite!("cond-assign-to-salu";
                     "(ite ?rel ?lhs ?rhs)" =>
-                    { TofinoStatefulAluApplier::new("alu-ite", vec!["?rel", "?lhs", "?rhs"]) }
+                    { TofinoStatefulAluApplier::new("arith-alu", "alu-ite", vec!["?rel", "?lhs", "?rhs"]) }
                 if is_n_depth_mapped("?rel".parse().unwrap(), 2, None)
                 if is_n_depth_mapped("?lhs".parse().unwrap(), 1, None)
                 if is_n_depth_mapped("?rhs".parse().unwrap(), 1, None))]
@@ -722,9 +852,10 @@ pub mod banzai_alu {
 mod test {
     use std::time::Duration;
 
-    use egg::Runner;
+    use egg::{Extractor, Runner};
 
     use crate::{
+        extractors::GreedyExtractor,
         language::transforms::tables_to_egraph,
         p4::{example_progs, p4ir::Table},
     };
@@ -733,12 +864,12 @@ mod test {
         multi_stage_action, seq_elim, split_table,
         tofino_alus::{
             stateful::conditional_assignments,
-            stateless::{arith_to_alu, cmp_to_rel},
+            stateless::{arith_to_alu, cmp_to_rel, lift_stateless},
         },
     };
 
     fn test_tofino_mapping(prog: Vec<Table>, filename: &'static str) {
-        let egraph = tables_to_egraph(prog);
+        let (egraph, root) = tables_to_egraph(prog);
         let rewrites = seq_elim()
             .into_iter()
             // .chain(split_table(1).into_iter())
@@ -746,6 +877,7 @@ mod test {
             .chain(multi_stage_action(2).into_iter())
             .chain(conditional_assignments().into_iter())
             .chain(cmp_to_rel().into_iter())
+            .chain(lift_stateless())
             .collect::<Vec<_>>();
         let runner = Runner::default()
             .with_egraph(egraph)
@@ -753,6 +885,11 @@ mod test {
             .with_time_limit(Duration::from_secs(10));
         let runner = runner.run(rewrites.iter());
         runner.egraph.dot().to_pdf(filename).unwrap();
+        let greedy_ext = GreedyExtractor {};
+        let extractor = Extractor::new(&runner.egraph, greedy_ext);
+        let (best_cost, best) = extractor.find_best(root);
+        println!("best cost: {}", best_cost);
+        println!("best: {}", best.pretty(80));
     }
 
     #[test]
