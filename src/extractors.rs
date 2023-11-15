@@ -16,7 +16,7 @@ impl CostFunction<Mio> for GreedyExtractor {
             Mio::Join(_) => 0,
             Mio::ArithAlu(_) | Mio::RelAlu(_) | Mio::SAlu(_) => 1,
             Mio::ArithAluOps(_) | Mio::RelAluOps(_) => 0,
-            Mio::Ite(_) => 1,
+            // Mio::Ite(_) => 1,
             Mio::GIte(_) => 1,
             Mio::Actions(_) => 1,
             Mio::Elaborations(_) => 1,
