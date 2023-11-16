@@ -103,12 +103,17 @@ pub mod stateless {
                                         let binding = egraph
                                             .analysis
                                             .new_var(MioAnalysis::get_type(egraph, to_lift));
-                                        let _binding_id = egraph.add(Mio::Symbol(binding.clone()));
                                         // remaining computation should be (op ?x ?binding) / (op ?binding ?x)
                                         let pattern_str = if hit_left {
-                                            format!("({} (arith-alu alu-global ?x) ?binding)", op)
+                                            format!(
+                                                "({} (arith-alu alu-global ?x) {})",
+                                                op, binding
+                                            )
                                         } else {
-                                            format!("({} ?binding (arith-alu alu-global ?x))", op)
+                                            format!(
+                                                "({} {} (arith-alu alu-global ?x))",
+                                                op, binding
+                                            )
                                         };
                                         let new_pattern =
                                             pattern_str.parse::<Pattern<Mio>>().unwrap();
