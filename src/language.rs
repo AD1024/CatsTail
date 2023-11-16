@@ -9,16 +9,20 @@ pub mod ir {
         str::FromStr,
     };
 
-    use egg::{define_language, Analysis, DidMerge, Id};
+    use egg::{define_language, Analysis, DidMerge, EGraph, Id};
 
     define_language! {
         pub enum Mio {
             "ite" = Ite([Id; 3]),
             // (GIte (keys k1 k2 k3...) (actions a1 a2 a3 ... default))
+            // each action is in the form of
+            // (elaborations (E table e1) (E table e2) ...)
             "gite" = GIte([Id; 2]),
             "keys" = Keys(Vec<Id>),
             "actions" = Actions(Vec<Id>),
-            "elab" = Elaborations(Vec<Id>),
+            "elaborations" = Elaborations(Vec<Id>),
+            // (E <table> <expr>)
+            "E" = Elaborate([Id; 2]),
             // putting tables in the same stage; equivalent to T1 || T2
             // (join ?t1 ?t2)
             "join" = Join([Id; 2]),
@@ -409,6 +413,23 @@ pub mod ir {
             return result;
         }
 
+        pub fn new_table_name(&mut self, derived_from: Option<String>) -> String {
+            let result = if let Some(derived_from) = derived_from {
+                format!("table_{}", derived_from)
+            } else {
+                format!("table_{}", self.var_counter)
+            };
+            self.var_counter += 1;
+            return result;
+        }
+
+        pub fn get_table_name(egraph: &egg::EGraph<Mio, Self>, id: Id) -> Option<String> {
+            match &egraph[id].data {
+                MioAnalysisData::Dataflow(RWAnalysis { table_name, .. }) => table_name.clone(),
+                _ => None,
+            }
+        }
+
         pub fn type_unification(lhs_ty: &MioType, rhs_ty: &MioType) -> MioType {
             match (lhs_ty, rhs_ty) {
                 (MioType::Bool, MioType::Bool) => MioType::Bool,
@@ -503,8 +524,13 @@ pub mod ir {
         pub fn new_dataflow_data(
             reads: HashSet<String>,
             writes: HashSet<String>,
+            table_name: Option<String>,
         ) -> MioAnalysisData {
-            MioAnalysisData::Dataflow(RWAnalysis { reads, writes })
+            MioAnalysisData::Dataflow(RWAnalysis {
+                reads,
+                writes,
+                table_name,
+            })
         }
 
         pub fn get_constant(egraph: &egg::EGraph<Mio, Self>, id: Id) -> Option<Constant> {
@@ -544,12 +570,81 @@ pub mod ir {
             }
         }
 
+        pub fn set_elaboration(
+            egraph: &mut egg::EGraph<Mio, Self>,
+            id: Id,
+            elaborations: HashSet<String>,
+        ) {
+            match &mut egraph[id].data {
+                MioAnalysisData::Action(u) => u.elaborations = elaborations,
+                _ => panic!("Dataflow {:?} has no elaborations", id),
+            }
+        }
+
+        pub fn add_to_elaboration(
+            egraph: &mut egg::EGraph<Mio, Self>,
+            id: Id,
+            elaboration: String,
+        ) {
+            match &mut egraph[id].data {
+                MioAnalysisData::Action(u) => u.elaborations.insert(elaboration),
+                _ => panic!("Dataflow {:?} has no elaborations", id),
+            };
+        }
+
         pub fn is_alu_op(egraph: &egg::EGraph<Mio, MioAnalysis>, id: Id, alu_op: &str) -> bool {
             match &egraph[id].nodes[0] {
                 Mio::ArithAluOps(op) => op == &alu_op.parse().unwrap(),
                 Mio::RelAluOps(op) => op == &alu_op.parse().unwrap(),
                 _ => false,
             }
+        }
+
+        pub fn add_expr(
+            egraph: &mut egg::EGraph<Mio, MioAnalysis>,
+            op: &'static str,
+            operands: Vec<Id>,
+        ) -> Id {
+            match op {
+                "+" => egraph.add(Mio::Add([operands[0], operands[1]])),
+                "-" => egraph.add(Mio::Sub([operands[0], operands[1]])),
+                "min" => egraph.add(Mio::Min([operands[0], operands[1]])),
+                "max" => egraph.add(Mio::Max([operands[0], operands[1]])),
+                "neg" => egraph.add(Mio::Neg(operands[0])),
+                "write" => egraph.add(Mio::Write([operands[0], operands[1]])),
+                "read" => egraph.add(Mio::Read([operands[0], operands[1]])),
+                "land" => egraph.add(Mio::LAnd([operands[0], operands[1]])),
+                "lor" => egraph.add(Mio::LOr([operands[0], operands[1]])),
+                "lnot" => egraph.add(Mio::LNot(operands[0])),
+                "lxor" => egraph.add(Mio::LXor([operands[0], operands[1]])),
+                "bitand" => egraph.add(Mio::BitAnd([operands[0], operands[1]])),
+                "bitor" => egraph.add(Mio::BitOr([operands[0], operands[1]])),
+                "bitnot" => egraph.add(Mio::BitNot(operands[0])),
+                "bitxor" => egraph.add(Mio::BitXor([operands[0], operands[1]])),
+                "bitshl" => egraph.add(Mio::BitShl([operands[0], operands[1]])),
+                "bitshr" => egraph.add(Mio::BitShr([operands[0], operands[1]])),
+                "=" => egraph.add(Mio::Eq([operands[0], operands[1]])),
+                "<" => egraph.add(Mio::Lt([operands[0], operands[1]])),
+                ">" => egraph.add(Mio::Gt([operands[0], operands[1]])),
+                "<=" => egraph.add(Mio::Le([operands[0], operands[1]])),
+                ">=" => egraph.add(Mio::Ge([operands[0], operands[1]])),
+                "!=" => egraph.add(Mio::Neq([operands[0], operands[1]])),
+                _ => panic!("Unknown operator {}", op),
+            }
+        }
+
+        pub fn has_stateful_elaboration(egraph: &egg::EGraph<Mio, MioAnalysis>, id: Id) -> bool {
+            return Self::elaborations(egraph, id)
+                .iter()
+                .any(|x| x.contains("global."));
+        }
+
+        pub fn has_stateless_elaboration(egraph: &egg::EGraph<Mio, MioAnalysis>, id: Id) -> bool {
+            return Self::elaborations(egraph, id)
+                .iter()
+                .filter(|x| !x.contains("global."))
+                .count()
+                > 0;
         }
     }
 
@@ -559,6 +654,7 @@ pub mod ir {
         // by rewrites; used for Control nodes and tables
         pub reads: HashSet<String>,
         pub writes: HashSet<String>,
+        pub table_name: Option<String>,
     }
 
     #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -664,6 +760,15 @@ pub mod ir {
 
         fn make(egraph: &egg::EGraph<Mio, Self>, enode: &Mio) -> Self::Data {
             match enode {
+                Mio::Elaborate([_, e]) => {
+                    return MioAnalysis::new_action_data(
+                        MioAnalysis::read_set(egraph, *e).clone(),
+                        MioAnalysis::write_set(egraph, *e).clone(),
+                        MioAnalysis::get_type(egraph, *e),
+                        MioAnalysis::get_constant(egraph, *e),
+                        MioAnalysis::elaborations(egraph, *e).clone(),
+                    );
+                }
                 Mio::NoOp => MioAnalysisData::Dataflow(Default::default()),
                 Mio::Global(v) => {
                     let v_data = match &egraph[*v].data {
@@ -686,6 +791,7 @@ pub mod ir {
                         return MioAnalysisData::Dataflow(RWAnalysis {
                             reads: t1.reads.union(&t2.reads).cloned().collect(),
                             writes: t1.writes.union(&t2.writes).cloned().collect(),
+                            table_name: None,
                         });
                     }
                     panic!(
@@ -697,7 +803,7 @@ pub mod ir {
                     (MioAnalysisData::Dataflow(d1), MioAnalysisData::Dataflow(d2)) => {
                         let reads = d1.reads.union(&d2.reads).cloned().collect();
                         let writes = d1.writes.union(&d2.writes).cloned().collect();
-                        MioAnalysis::new_dataflow_data(reads, writes)
+                        MioAnalysis::new_dataflow_data(reads, writes, None)
                     }
                     _ => panic!("Seq expects children to be tables/dataflows"),
                 },
@@ -803,6 +909,8 @@ pub mod ir {
                     MioAnalysis::new_dataflow_data(
                         keys_reads.union(&action_reads).cloned().collect(),
                         action_writes.clone(),
+                        // populated by the table converter
+                        None,
                     )
                 }
                 Mio::BitNot(x) | Mio::Neg(x) => {
@@ -1330,6 +1438,7 @@ pub mod transforms {
         let mut table_ids = vec![];
         while let Some(table) = tables.pop() {
             let mut action_elaborations = vec![];
+            let table_name_id = egraph.add(Mio::Symbol(table.name.clone()));
             for (_action_name, action) in table.actions {
                 let (recexpr, built, _reads, writes) = stmt_to_recexpr(&action);
                 let mut worklist = vec![];
@@ -1342,10 +1451,11 @@ pub mod transforms {
                 let mut action_ids = vec![];
                 while let Some((k, id)) = worklist.pop() {
                     let expr = recexpr[id].build_recexpr(|id| recexpr[id].clone());
-                    println!("{} =>\n{}", k, expr.pretty(80));
+                    // println!("{} =>\n{}", k, expr.pretty(80));
                     let egraph_id = egraph.add_expr(&expr);
+                    let egraph_id = egraph.add(Mio::Elaborate([table_name_id, egraph_id]));
                     if let MioAnalysisData::Action(u) = &mut egraph[egraph_id].data {
-                        println!("Action update {}:\n{:?}", k, u);
+                        // println!("Action update {}:\n{:?}", k, u);
                         u.writes = u
                             .writes
                             .union(&HashSet::from([k.clone()]))
@@ -1371,6 +1481,12 @@ pub mod transforms {
             let keys_id = egraph.add(Mio::Keys(keys));
             let actions_id = egraph.add(Mio::Actions(actions));
             let gite_id = egraph.add(Mio::GIte([keys_id, actions_id]));
+            match egraph[gite_id].data {
+                MioAnalysisData::Dataflow(ref mut d) => {
+                    d.table_name = Some(table.name.clone());
+                }
+                _ => panic!("GIte should have dataflow data"),
+            }
             if table_ids.len() == 0 {
                 table_ids.push(gite_id);
             } else {

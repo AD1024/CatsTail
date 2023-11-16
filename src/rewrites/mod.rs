@@ -1,4 +1,4 @@
-use egg::{Applier, EGraph, Id, Language, Pattern, Rewrite, Subst, Var};
+use egg::{rewrite, Applier, EGraph, Id, Language, Pattern, Rewrite, Searcher, Subst, Var};
 
 use crate::language::{
     ir::{Constant, Mio, MioAnalysis, MioAnalysisData},
@@ -278,6 +278,208 @@ impl Applier<Mio, MioAnalysis> for AluApplier {
     }
 }
 
+pub fn lift_stateless() -> Vec<RW> {
+    // If the elaboration of some computation is a global variable,
+    // and the computation requires reading that global variable, e.g. global.x = global.x + (meta.y + meta.z)
+    // then we could lift (meta.y + meta.z) to a previous stage
+    // When such computation has a depth >= 2, we must lift it to a previous stage, otherwise we cannot compile it.
+    struct StatelessLiftApplier(Var, Var);
+    impl Applier<Mio, MioAnalysis> for StatelessLiftApplier {
+        fn apply_one(
+            &self,
+            egraph: &mut egg::EGraph<Mio, MioAnalysis>,
+            eclass: Id,
+            subst: &Subst,
+            searcher_ast: Option<&egg::PatternAst<Mio>>,
+            rule_name: egg::Symbol,
+        ) -> Vec<Id> {
+            // First check whether in each action there is an elaboration that involves
+            // both reading and writing to a global variable
+            let keys = subst[self.0];
+            let action_wrapper_id = subst[self.1];
+            let mut lhs_action_elabs = vec![];
+            let mut rhs_action_elabs = vec![];
+            let mut changed: Vec<Id> = vec![];
+            // copy to avoid holding mut and immut references
+            // (actions (elaborations (E e) ...))
+            for action_wrapper in egraph[action_wrapper_id]
+                .nodes
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+            {
+                // (elaborations (E e) ...)
+                for &elab_wrapper_id in action_wrapper.children() {
+                    for elab_node in egraph[elab_wrapper_id]
+                        .nodes
+                        .iter()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                    {
+                        let mut remain = vec![];
+                        let mut lifted = vec![];
+                        // (E e)
+                        for &action_elaborations in elab_node.children() {
+                            let elaborations =
+                                MioAnalysis::elaborations(egraph, action_elaborations).clone();
+                            let read_set = MioAnalysis::read_set(egraph, action_elaborations);
+                            if elaborations.intersection(read_set).next().is_none() {
+                                // no read-write global variable
+                                continue;
+                            }
+                            // we will need to check whether this elaboration has a match in the form of
+                            // (?op ?x ?y) where ?x or ?y is a global variable
+                            for op in ["+", "-"] {
+                                let pattern_l =
+                                    format!("(E ?t ({} (arith-alu alu-global ?x) ?y))", op)
+                                        .parse::<Pattern<Mio>>()
+                                        .unwrap();
+                                let pattern_r =
+                                    format!("(E ?t ({} ?y (arith-alu alu-global ?x)))", op)
+                                        .parse::<Pattern<Mio>>()
+                                        .unwrap();
+                                egraph.rebuild();
+                                let search_left =
+                                    pattern_l.search_eclass(egraph, action_elaborations);
+                                let search_right =
+                                    pattern_r.search_eclass(egraph, action_elaborations);
+                                let hit_left = search_left.is_some();
+                                if let Some(matches) = search_left.or(search_right) {
+                                    // split ?y to some previous stage and replace with a new PHV field
+                                    let new_subst = &matches.substs[0];
+                                    let pattern_var = "?y".parse().unwrap();
+                                    if is_n_depth_mapped(pattern_var, 1, Some(false))(
+                                        egraph,
+                                        new_subst[pattern_var],
+                                        new_subst,
+                                    ) {
+                                        // if it is at most depth 1 computation on stateless alu, we don't need to lift it
+                                        remain.push((action_elaborations, elaborations.clone()));
+                                        continue;
+                                    }
+                                    if !is_mapped(pattern_var, Some(false))(
+                                        egraph,
+                                        action_elaborations,
+                                        new_subst,
+                                    ) {
+                                        // if it is not mapped to stateless alus, we can't lift it
+                                        remain.push((action_elaborations, elaborations.clone()));
+                                        continue;
+                                    }
+                                    let to_lift = new_subst[pattern_var];
+                                    let binding = egraph
+                                        .analysis
+                                        .new_var(MioAnalysis::get_type(egraph, to_lift));
+                                    // remaining computation should be (op ?x ?binding) / (op ?binding ?x)
+                                    let alu_global_id =
+                                        egraph.add(Mio::ArithAluOps("alu-global".parse().unwrap()));
+                                    // Id of (arith-alu alu-global ?x)
+                                    let global_var_id = egraph.add(Mio::ArithAlu(vec![
+                                        alu_global_id,
+                                        new_subst["?x".parse().unwrap()],
+                                    ]));
+                                    let binding_id = egraph.add(Mio::Symbol(binding.clone()));
+                                    let remain_id = if hit_left {
+                                        // Wrap to be (op (arith-alu alu-global ?x) ?binding)
+                                        MioAnalysis::add_expr(
+                                            egraph,
+                                            op,
+                                            vec![global_var_id, binding_id],
+                                        )
+                                    } else {
+                                        // Wrap to be (op ?binding (arith-alu alu-global ?x))
+                                        MioAnalysis::add_expr(
+                                            egraph,
+                                            op,
+                                            vec![binding_id, global_var_id],
+                                        )
+                                    };
+                                    remain.push((remain_id, elaborations.clone()));
+                                    lifted.push((to_lift, binding));
+                                } else {
+                                    remain.push((action_elaborations, elaborations.clone()));
+                                }
+                            }
+                        }
+                        if lifted.len() > 0 {
+                            lhs_action_elabs.push(lifted);
+                        }
+                        if remain.len() > 0 {
+                            rhs_action_elabs.push(remain);
+                        }
+                    }
+                    break;
+                }
+            }
+            if lhs_action_elabs.len() == 0 {
+                vec![]
+            } else {
+                // construct new table
+                let origin_table_name = MioAnalysis::get_table_name(egraph, eclass);
+                let new_table_name = egraph.analysis.new_table_name(origin_table_name.clone());
+                let table_name_id = egraph.add(Mio::Symbol(new_table_name));
+                let elaborate_ids = lhs_action_elabs
+                    .iter()
+                    .map(|v| {
+                        v.iter()
+                            .map(|(expr_id, binding)| {
+                                let elaborate_id =
+                                    egraph.add(Mio::Elaborate([table_name_id, *expr_id]));
+                                MioAnalysis::add_to_elaboration(
+                                    egraph,
+                                    elaborate_id,
+                                    binding.clone(),
+                                );
+                                return elaborate_id;
+                            })
+                            .collect()
+                    })
+                    .collect::<Vec<Vec<_>>>();
+                let elab_ids = elaborate_ids
+                    .into_iter()
+                    .map(|v| egraph.add(Mio::Elaborations(v)))
+                    .collect::<Vec<_>>();
+                let action_id = egraph.add(Mio::Actions(elab_ids));
+                let lhs_table_id = egraph.add(Mio::GIte([keys, action_id]));
+                // Construct RHS table
+                let new_table_name = egraph.analysis.new_table_name(origin_table_name);
+                let table_name_id = egraph.add(Mio::Symbol(new_table_name));
+                // Construct Vec of (E expr)
+                let elaborate_ids = rhs_action_elabs
+                    .into_iter()
+                    .map(|v| {
+                        v.into_iter()
+                            .map(|(id, elaboration)| {
+                                let elaborate_id = egraph.add(Mio::Elaborate([table_name_id, id]));
+                                MioAnalysis::set_elaboration(egraph, elaborate_id, elaboration);
+                                return elaborate_id;
+                            })
+                            .collect()
+                    })
+                    .collect::<Vec<Vec<_>>>();
+                // Construct each action: (Elaboration (E e1) (E e2) ...)
+                let elab_ids = elaborate_ids
+                    .into_iter()
+                    .map(|v| egraph.add(Mio::Elaborations(v)))
+                    .collect::<Vec<_>>();
+                // Construct Action node
+                let action_id = egraph.add(Mio::Actions(elab_ids));
+                // Finally, the table
+                let rhs_table_id = egraph.add(Mio::GIte([keys, action_id]));
+                // LHS before RHS, set value to the binding
+                let seq_id = egraph.add(Mio::Seq([lhs_table_id, rhs_table_id]));
+                vec![seq_id]
+                    .into_iter()
+                    .chain(changed.into_iter())
+                    .collect()
+            }
+        }
+    }
+    vec![rewrite!("lift-comp";
+                "(gite ?keys ?actions)" =>
+                {  StatelessLiftApplier("?keys".parse().unwrap(), "?actions".parse().unwrap()) })]
+}
+
 mod test {
     use std::time::Duration;
 
@@ -289,10 +491,8 @@ mod test {
         p4::{example_progs, p4ir::Table},
         rewrites::{
             domino::stateless::arith_to_alu,
-            tofino::{
-                stateful::conditional_assignments,
-                stateless::{cmp_to_rel, lift_stateless},
-            },
+            lift_stateless,
+            tofino::{stateful::conditional_assignments, stateless::cmp_to_rel},
         },
     };
 
@@ -302,7 +502,7 @@ mod test {
         let (egraph, root) = tables_to_egraph(prog);
         let rewrites = seq_elim()
             .into_iter()
-            // .chain(split_table(1).into_iter())
+            .chain(split_table(1).into_iter())
             .chain(arith_to_alu().into_iter())
             .chain(multi_stage_action(2).into_iter())
             .chain(conditional_assignments().into_iter())
@@ -315,7 +515,11 @@ mod test {
             .with_time_limit(Duration::from_secs(10));
         let runner = runner.run(rewrites.iter());
         runner.egraph.dot().to_pdf(filename).unwrap();
-        let greedy_ext = GreedyExtractor {};
+        let greedy_ext = GreedyExtractor {
+            egraph: &runner.egraph,
+            stateful_update_limit: 2,
+            stateless_update_limit: 1,
+        };
         let extractor = Extractor::new(&runner.egraph, greedy_ext);
         let (best_cost, best) = extractor.find_best(root);
         println!("best cost: {}", best_cost);
