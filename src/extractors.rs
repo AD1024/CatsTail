@@ -1,4 +1,5 @@
 use core::num;
+use std::collections::HashSet;
 
 use egg::{CostFunction, EGraph, Extractor, Language};
 
@@ -27,22 +28,25 @@ impl<'a> CostFunction<Mio> for GreedyExtractor<'a> {
             Mio::GIte(_) => 1,
             Mio::Actions(_) => 1,
             Mio::Elaborations(elabs) => {
-                let mut num_stateful_updates = 0;
-                let mut num_stateless_upates = 0;
+                let mut num_stateful_updates = HashSet::new();
+                let mut num_stateless_upates = HashSet::new();
+                let mut c = 0;
                 for elaboration in elabs.iter() {
                     if MioAnalysis::has_stateful_elaboration(self.egraph, *elaboration) {
-                        num_stateful_updates += 1;
+                        num_stateful_updates
+                            .extend(MioAnalysis::elaborations(self.egraph, *elaboration).iter());
                     }
                     if MioAnalysis::has_stateless_elaboration(self.egraph, *elaboration) {
-                        num_stateless_upates += 1;
+                        num_stateless_upates
+                            .extend(MioAnalysis::elaborations(self.egraph, *elaboration).iter());
                     }
-                    if num_stateful_updates > self.stateful_update_limit
-                        || num_stateless_upates > self.stateless_update_limit
+                    if num_stateful_updates.len() > self.stateful_update_limit
+                        || num_stateless_upates.len() > self.stateless_update_limit
                     {
-                        return usize::MAX;
+                        c = usize::MAX;
                     }
                 }
-                0
+                c
             }
             Mio::Elaborate(_) => 0,
             Mio::Keys(_) => 1,

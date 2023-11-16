@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use egg::{rewrite, Applier};
 
 use super::*;
@@ -64,7 +66,12 @@ pub fn split_table(n: usize) -> Vec<RW> {
             let split_bound = self.2;
             let mut index = 0;
             for a in egraph[a1s].nodes[0].children() {
-                if MioAnalysis::write_set(egraph, *a).is_disjoint(&key_reads) {
+                // if *a elaborates to some global register r
+                // and r is read by some other elaboration(s),
+                // then it must stay in the same state
+                if MioAnalysis::has_stateful_elaboration(egraph, *a) {
+                    remained.push(index);
+                } else if MioAnalysis::elaborations(egraph, *a).is_disjoint(&key_reads) {
                     if remained.len() == split_bound {
                         split.push(index);
                     } else {
@@ -123,17 +130,17 @@ pub fn multi_stage_action(update_limit: usize) -> Vec<RW> {
             for elabs in egraph[aid].nodes[0].children() {
                 let mut remained = vec![];
                 let mut split = vec![];
-                let mut num_global_writes = 0;
+                let mut num_global_writes = HashSet::new();
                 for elaboration in egraph[*elabs].nodes[0].children() {
                     // each elaboration
-                    if MioAnalysis::write_set(egraph, *elaboration).is_disjoint(keys_read) {
+                    if MioAnalysis::elaborations(egraph, *elaboration).is_disjoint(keys_read) {
                         match &egraph[*elaboration].data {
                             MioAnalysisData::Action(u) => {
                                 if u.elaborations.iter().any(|x| x.contains("global.")) {
-                                    if num_global_writes == limit {
+                                    if num_global_writes.len() == limit {
                                         split.push(*elaboration);
                                     } else {
-                                        num_global_writes += 1;
+                                        num_global_writes.extend(u.elaborations.iter());
                                         remained.push(*elaboration);
                                     }
                                 }

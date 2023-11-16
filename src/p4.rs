@@ -418,4 +418,29 @@ pub mod example_progs {
         table.add_action("set_pkt".into(), set_pkt);
         return vec![table];
     }
+
+    pub fn flowlet() -> Vec<Table> {
+        let set_pkt = block!(
+            assign!("saved_hop_tmp" => var!("global.saved_hop")),
+            assign!("last_time_tmp" => var!("global.last_time")),
+            ite!(
+                lt!(
+                    sub!(var!("meta.arrival"), var!("last_time_tmp")),
+                    Expr::Int(5)
+                ),
+                block!(assign!("saved_hop_tmp" => var!("meta.new_hop"))),
+                block!()
+            ),
+            assign!("last_time_tmp" => var!("meta.arrival")),
+            assign!("meta.next_hop" => var!("saved_hop_tmp")),
+            assign!("global.saved_hop" => var!("saved_hop_tmp")),
+            assign!("global.last_time" => var!("last_time_tmp"))
+        );
+        let mut table = Table::new(
+            "flowlet_table".to_string(),
+            vec!["meta.flowlet_key".to_string()],
+        );
+        table.add_action("set_pkt".into(), set_pkt);
+        return vec![table];
+    }
 }

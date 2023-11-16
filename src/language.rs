@@ -1451,11 +1451,11 @@ pub mod transforms {
                 let mut action_ids = vec![];
                 while let Some((k, id)) = worklist.pop() {
                     let expr = recexpr[id].build_recexpr(|id| recexpr[id].clone());
-                    // println!("{} =>\n{}", k, expr.pretty(80));
+                    println!("{} =>\n{}", k, expr.pretty(80));
                     let egraph_id = egraph.add_expr(&expr);
                     let egraph_id = egraph.add(Mio::Elaborate([table_name_id, egraph_id]));
                     if let MioAnalysisData::Action(u) = &mut egraph[egraph_id].data {
-                        // println!("Action update {}:\n{:?}", k, u);
+                        println!("Action update {}:\n{:?}", k, u);
                         u.writes = u
                             .writes
                             .union(&HashSet::from([k.clone()]))

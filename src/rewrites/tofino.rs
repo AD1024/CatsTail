@@ -147,3 +147,69 @@ pub mod stateful {
                 if is_n_depth_mapped("?rhs".parse().unwrap(), 1, None))]
     }
 }
+
+mod test {
+    use std::time::Duration;
+
+    use egg::{Extractor, Runner};
+
+    use crate::{
+        extractors::GreedyExtractor,
+        language::transforms::tables_to_egraph,
+        p4::{example_progs, p4ir::Table},
+        rewrites::{
+            domino::stateless::arith_to_alu,
+            lift_stateless,
+            table_transformations::{multi_stage_action, seq_elim, split_table},
+            tofino::{stateful::conditional_assignments, stateless::cmp_to_rel},
+        },
+    };
+
+    fn test_tofino_mapping(prog: Vec<Table>, filename: &'static str) {
+        let (egraph, root) = tables_to_egraph(prog);
+        let rewrites = seq_elim()
+            .into_iter()
+            .chain(split_table(1).into_iter())
+            .chain(arith_to_alu().into_iter())
+            .chain(multi_stage_action(2).into_iter())
+            .chain(conditional_assignments().into_iter())
+            .chain(cmp_to_rel().into_iter())
+            .chain(lift_stateless())
+            .collect::<Vec<_>>();
+        let runner = Runner::default()
+            .with_egraph(egraph)
+            // .with_node_limit(5_000)
+            .with_time_limit(Duration::from_secs(10));
+        let runner = runner.run(rewrites.iter());
+        runner.egraph.dot().to_pdf(filename).unwrap();
+        let greedy_ext = GreedyExtractor {
+            egraph: &runner.egraph,
+            stateful_update_limit: 2,
+            stateless_update_limit: 1,
+        };
+        let extractor = Extractor::new(&runner.egraph, greedy_ext);
+        let (best_cost, best) = extractor.find_best(root);
+        println!("best cost: {}", best_cost);
+        println!("best: {}", best.pretty(80));
+    }
+
+    #[test]
+    fn test_tofino_rcp() {
+        test_tofino_mapping(example_progs::rcp(), "rcp.pdf");
+    }
+
+    #[test]
+    fn test_tofino_sampling() {
+        test_tofino_mapping(example_progs::sampling(), "sampling.pdf");
+    }
+
+    #[test]
+    fn test_tofino_blue_increase() {
+        test_tofino_mapping(example_progs::blue_increase(), "blue_increase.pdf");
+    }
+
+    #[test]
+    fn test_tofino_flowlet() {
+        test_tofino_mapping(example_progs::flowlet(), "flowlet.pdf");
+    }
+}
