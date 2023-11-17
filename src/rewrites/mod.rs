@@ -481,6 +481,9 @@ pub fn lift_stateless() -> Vec<RW> {
             }
         }
     }
+    // TODO: add 2 more rewrits:
+    // 1. lift stateless updates to previous stage or next stage
+    // 2. Make stateless computation to elaborate to some PHV fields in the same stage
     vec![rewrite!("lift-comp";
                 "(gite ?keys ?actions)" =>
                 {  StatelessLiftApplier("?keys".parse().unwrap(), "?actions".parse().unwrap()) })]

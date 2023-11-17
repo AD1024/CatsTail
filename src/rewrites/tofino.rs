@@ -165,7 +165,8 @@ mod test {
         },
     };
 
-    fn test_tofino_mapping(prog: Vec<Table>, filename: &'static str) {
+    fn test_tofino_mapping(prog: Vec<Table>, filename: &'static str) -> Duration {
+        let start_time = std::time::Instant::now();
         let (egraph, root) = tables_to_egraph(prog);
         let rewrites = seq_elim()
             .into_iter()
@@ -185,44 +186,67 @@ mod test {
         // runner.egraph.dot().to_pdf(filename).unwrap();
         let greedy_ext = GreedyExtractor {
             egraph: &runner.egraph,
-            stateful_update_limit: 2,
+            stateful_update_limit: 1,
             stateless_update_limit: 1,
             effect_disjoint: false,
         };
         let extractor = Extractor::new(&runner.egraph, greedy_ext);
         let (best_cost, best) = extractor.find_best(root);
+        let end_time = std::time::Instant::now();
         println!("best cost: {}", best_cost);
         println!("best: {}", best.pretty(80));
+        println!("time: {:?}", end_time - start_time);
+        end_time - start_time
+    }
+
+    fn run_n_times(n: usize, f: impl Fn() -> Duration) -> Duration {
+        let mut total = Duration::new(0, 0);
+        for _ in 0..n {
+            total += f();
+        }
+        total / n as u32
     }
 
     #[test]
     fn test_tofino_rcp() {
-        test_tofino_mapping(example_progs::rcp(), "rcp.pdf");
+        let test_fn = || test_tofino_mapping(example_progs::rcp(), "rcp.pdf");
+        let avg_time = run_n_times(10, test_fn);
+        println!("RCP avg time: {:?}", avg_time);
     }
 
     #[test]
     fn test_tofino_sampling() {
-        test_tofino_mapping(example_progs::sampling(), "sampling.pdf");
+        let test_fn = || test_tofino_mapping(example_progs::sampling(), "sampling.pdf");
+        let avg_time = run_n_times(10, test_fn);
+        println!("sampling avg time: {:?}", avg_time);
     }
 
     #[test]
     fn test_tofino_blue_increase() {
-        test_tofino_mapping(example_progs::blue_increase(), "blue_increase.pdf");
+        let test_fn = || test_tofino_mapping(example_progs::blue_increase(), "blue_increase.pdf");
+        let avg_time = run_n_times(10, test_fn);
+        println!("blue increase avg time: {:?}", avg_time);
     }
 
     #[test]
     fn test_tofino_flowlet() {
-        test_tofino_mapping(example_progs::flowlet(), "flowlet.pdf");
+        let test_fn = || test_tofino_mapping(example_progs::flowlet(), "flowlet.pdf");
+        let avg_time = run_n_times(10, test_fn);
+        println!("flowlet avg time: {:?}", avg_time);
     }
 
     #[test]
     fn test_tofino_marple_nmo() {
-        test_tofino_mapping(example_progs::marple_nmo(), "marple_nmo.pdf");
+        let test_fn = || test_tofino_mapping(example_progs::marple_nmo(), "marple_nmo.pdf");
+        let avg_time = run_n_times(10, test_fn);
+        println!("marple nmo avg time: {:?}", avg_time);
     }
 
     #[test]
     fn test_tofino_marple_new() {
-        test_tofino_mapping(example_progs::marple_new_flow(), "marple_nmo.pdf");
+        let test_fn = || test_tofino_mapping(example_progs::marple_new_flow(), "marple_new.pdf");
+        let avg_time = run_n_times(10, test_fn);
+        println!("marple new avg time: {:?}", avg_time);
     }
 
     #[test]

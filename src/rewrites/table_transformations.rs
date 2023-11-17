@@ -16,6 +16,7 @@ pub fn waw_elim() -> Vec<RW> {
         k2: Var,
         a1: Var,
         a2: Var,
+        t3: Option<Var>,
     }
     impl Applier<Mio, MioAnalysis> for WAWElimApplier {
         fn apply_one(
@@ -74,7 +75,10 @@ pub fn waw_elim() -> Vec<RW> {
                 .map(|v| egraph.add(Mio::Elaborations(v)))
                 .collect::<Vec<_>>();
             let new_actions_id = egraph.add(Mio::Actions(elaboration_ids));
-            let new_table_id = egraph.add(Mio::GIte([new_keys_id, new_actions_id]));
+            let mut new_table_id = egraph.add(Mio::GIte([new_keys_id, new_actions_id]));
+            if let Some(t3) = self.t3 {
+                new_table_id = egraph.add(Mio::Seq([new_table_id, subst[t3]]));
+            }
             egraph.union(eclass, new_table_id);
             vec![eclass, new_table_id]
         }
@@ -87,6 +91,7 @@ pub fn waw_elim() -> Vec<RW> {
                     k2: "?k2s".parse().unwrap(),
                     a1: "?a1s".parse().unwrap(),
                     a2: "?a2s".parse().unwrap(),
+                    t3: Some("?t3".parse().unwrap()),
                 }
              }
         ),
@@ -96,6 +101,7 @@ pub fn waw_elim() -> Vec<RW> {
                 k2: "?k2s".parse().unwrap(),
                 a1: "?a1s".parse().unwrap(),
                 a2: "?a2s".parse().unwrap(),
+                t3: None,
             }
         }),
     ]
@@ -233,7 +239,6 @@ pub fn multi_stage_action(global_update_limit: usize, phv_update_limit: usize) -
                     if MioAnalysis::elaborations(egraph, *elaboration).is_disjoint(keys_read) {
                         match &egraph[*elaboration].data {
                             MioAnalysisData::Action(u) => {
-                                println!("elaborations: {:?}", u.elaborations);
                                 if u.elaborations.iter().any(|x| x.contains("global.")) {
                                     if num_global_writes.len() == global_update_limit {
                                         split.push(*elaboration);
@@ -246,7 +251,6 @@ pub fn multi_stage_action(global_update_limit: usize, phv_update_limit: usize) -
                                                     > 0
                                             {
                                                 if fixed.contains(others) {
-                                                    remained.retain(|x| x != others);
                                                     num_global_writes.retain(|x| {
                                                         !MioAnalysis::elaborations(egraph, *others)
                                                             .contains(*x)
@@ -256,6 +260,7 @@ pub fn multi_stage_action(global_update_limit: usize, phv_update_limit: usize) -
                                                             .contains(*x)
                                                     });
                                                 }
+                                                remained.retain(|x| x != others);
                                                 fixed.insert(others);
                                                 split.push(*others);
                                             }
@@ -279,7 +284,6 @@ pub fn multi_stage_action(global_update_limit: usize, phv_update_limit: usize) -
                                                 )
                                             {
                                                 if fixed.contains(others) {
-                                                    remained.retain(|x| x != others);
                                                     num_global_writes.retain(|x| {
                                                         !MioAnalysis::elaborations(egraph, *others)
                                                             .contains(*x)
@@ -289,6 +293,7 @@ pub fn multi_stage_action(global_update_limit: usize, phv_update_limit: usize) -
                                                             .contains(*x)
                                                     });
                                                 }
+                                                remained.retain(|x| x != others);
                                                 fixed.insert(others);
                                                 split.push(*others);
                                             }
@@ -306,9 +311,6 @@ pub fn multi_stage_action(global_update_limit: usize, phv_update_limit: usize) -
                         split.push(*elaboration);
                     }
                 }
-                println!("remained: {:?}", remained);
-                println!("split: {:?}", split);
-                println!("num_global_writes: {:?}", num_global_writes);
                 if remained.len() == 0 || split.len() == 0 {
                     continue;
                 }
