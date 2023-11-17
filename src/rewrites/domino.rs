@@ -553,4 +553,17 @@ mod test {
     fn test_domino_sampling() {
         test_domino_mapping(crate::p4::example_progs::sampling(), "rcp.pdf");
     }
+
+    #[test]
+    fn test_domino_marple_flow_new() {
+        test_domino_mapping(
+            crate::p4::example_progs::marple_new_flow(),
+            "marple_new_flow.pdf",
+        );
+    }
+
+    #[test]
+    fn test_domino_marple_nmo() {
+        test_domino_mapping(crate::p4::example_progs::marple_nmo(), "marple_nmo.pdf");
+    }
 }

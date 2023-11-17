@@ -444,6 +444,47 @@ pub mod example_progs {
         return vec![table];
     }
 
+    pub fn marple_nmo() -> Vec<Table> {
+        let set_pkt = block!(
+            assign!("count_tmp" => var!("global.count")),
+            assign!("maxseq_tmp" => var!("global.maxseq")),
+            ite!(
+                lt!(var!("meta.seq"), var!("maxseq_tmp")),
+                assign!("count_tmp" => add!(var!("count_tmp"), Expr::Int(1))),
+                assign!("maxseq_tmp" => var!("meta.seq"))
+            ),
+            assign!("global.count" => var!("count_tmp")),
+            assign!("global.maxseq" => var!("maxseq_tmp"))
+        );
+        let mut table = Table::new(
+            "marple_nmo_table".to_string(),
+            vec!["meta.marple_nmo_key".to_string()],
+        );
+        table.add_action("set_pkt".into(), set_pkt);
+        return vec![table];
+    }
+
+    pub fn marple_new_flow() -> Vec<Table> {
+        let set_pkt = block!(
+            assign!("count_tmp" => var!("global.count")),
+            ite!(
+                eq!(var!("count_tmp"), Expr::Int(0)),
+                block!(
+                    assign!("meta.new_flow" => Expr::Int(1)),
+                    assign!("count_tmp" => Expr::Int(1))
+                ),
+                block!()
+            ),
+            assign!("global.count" => var!("count_tmp"))
+        );
+        let mut table = Table::new(
+            "marple_new_flow_table".to_string(),
+            vec!["meta.marple_new_flow_key".to_string()],
+        );
+        table.add_action("set_pkt".into(), set_pkt);
+        return vec![table];
+    }
+
     pub fn stateful_fw() -> Vec<Table> {
         let set_pkt = block!(
             assign!("established_tmp" => var!("global.established")),

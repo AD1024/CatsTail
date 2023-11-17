@@ -213,4 +213,14 @@ mod test {
     fn test_tofino_flowlet() {
         test_tofino_mapping(example_progs::flowlet(), "flowlet.pdf");
     }
+
+    #[test]
+    fn test_tofino_marple_nmo() {
+        test_tofino_mapping(example_progs::marple_nmo(), "marple_nmo.pdf");
+    }
+
+    #[test]
+    fn test_tofino_marple_new() {
+        test_tofino_mapping(example_progs::marple_new_flow(), "marple_nmo.pdf");
+    }
 }
