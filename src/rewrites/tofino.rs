@@ -160,7 +160,7 @@ mod test {
         rewrites::{
             domino::stateless::arith_to_alu,
             lift_stateless,
-            table_transformations::{multi_stage_action, seq_elim, split_table},
+            table_transformations::{multi_stage_action, seq_elim, split_table, waw_elim},
             tofino::{stateful::conditional_assignments, stateless::cmp_to_rel},
         },
     };
@@ -169,19 +169,20 @@ mod test {
         let (egraph, root) = tables_to_egraph(prog);
         let rewrites = seq_elim()
             .into_iter()
-            .chain(split_table(1).into_iter())
-            .chain(arith_to_alu().into_iter())
-            .chain(multi_stage_action(2).into_iter())
-            .chain(conditional_assignments().into_iter())
-            .chain(cmp_to_rel().into_iter())
+            .chain(split_table(1))
+            .chain(arith_to_alu())
+            .chain(multi_stage_action(2))
+            .chain(conditional_assignments())
+            .chain(cmp_to_rel())
             .chain(lift_stateless())
+            .chain(waw_elim())
             .collect::<Vec<_>>();
         let runner = Runner::default()
             .with_egraph(egraph)
             // .with_node_limit(5_000)
             .with_time_limit(Duration::from_secs(10));
         let runner = runner.run(rewrites.iter());
-        runner.egraph.dot().to_pdf(filename).unwrap();
+        // runner.egraph.dot().to_pdf(filename).unwrap();
         let greedy_ext = GreedyExtractor {
             egraph: &runner.egraph,
             stateful_update_limit: 2,
@@ -222,5 +223,10 @@ mod test {
     #[test]
     fn test_tofino_marple_new() {
         test_tofino_mapping(example_progs::marple_new_flow(), "marple_nmo.pdf");
+    }
+
+    #[test]
+    fn test_tofino_waw_elim() {
+        test_tofino_mapping(example_progs::cetus_waw(), "waw_elim.pdf");
     }
 }

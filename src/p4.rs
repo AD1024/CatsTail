@@ -510,4 +510,14 @@ pub mod example_progs {
         table.add_action("set_pkt".into(), set_pkt);
         return vec![table];
     }
+
+    pub fn cetus_waw() -> Vec<Table> {
+        let a1 = assign!("meta.b" => add!(var!("meta.c"), Expr::Int(1)));
+        let a2 = assign!("meta.b" => Expr::Int(1));
+        let mut table1 = Table::new("first_table".to_string(), vec!["meta.a".to_string()]);
+        let mut table2 = Table::new("second_table".to_string(), vec!["meta.a".to_string()]);
+        table1.add_action("a1".into(), a1);
+        table2.add_action("a2".into(), a2);
+        return vec![table1, table2];
+    }
 }

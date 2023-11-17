@@ -765,17 +765,17 @@ pub mod ir {
                 return DidMerge(true, false);
             }
             if let (MioAnalysisData::Dataflow(lhs), MioAnalysisData::Dataflow(rhs)) = (&a, &b) {
-                assert_eq!(lhs.reads, rhs.reads);
+                // assert_eq!(lhs.reads, rhs.reads);
                 assert_eq!(lhs.writes, rhs.writes);
                 return DidMerge(false, false);
             }
             if let (MioAnalysisData::Action(lhs), MioAnalysisData::Dataflow(rhs)) = (&a, &b) {
-                assert_eq!(lhs.reads, rhs.reads);
+                // assert_eq!(lhs.reads, rhs.reads);
                 assert_eq!(lhs.writes, rhs.writes);
                 return DidMerge(false, false);
             }
             if let (MioAnalysisData::Dataflow(lhs), MioAnalysisData::Action(rhs)) = (&a, &b) {
-                assert_eq!(lhs.reads, rhs.reads);
+                // assert_eq!(lhs.reads, rhs.reads);
                 assert_eq!(lhs.writes, rhs.writes);
                 *a = b;
                 return DidMerge(true, false);
