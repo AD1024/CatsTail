@@ -501,7 +501,8 @@ pub mod example_progs {
                     ),
                     block!()
                 ))
-            )
+            ),
+            assign!("global.established" => var!("established_tmp"))
         );
         let mut table = Table::new(
             "stateful_fw_table".to_string(),

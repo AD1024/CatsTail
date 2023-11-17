@@ -200,8 +200,8 @@ pub fn split_table(n: usize) -> Vec<RW> {
 /// Span actions across stages
 /// `update_limit` is the maxium number of global updates allowed in a stage for an action
 /// Also need to guarantee that actions kept in the table do not modify the keys
-pub fn multi_stage_action(update_limit: usize) -> Vec<RW> {
-    struct MultiStagedApplier(Var, Var, usize);
+pub fn multi_stage_action(global_update_limit: usize, phv_update_limit: usize) -> Vec<RW> {
+    struct MultiStagedApplier(Var, Var, usize, usize);
     impl Applier<Mio, MioAnalysis> for MultiStagedApplier {
         fn apply_one(
             &self,
@@ -213,7 +213,8 @@ pub fn multi_stage_action(update_limit: usize) -> Vec<RW> {
         ) -> Vec<Id> {
             let kid = subst[self.0];
             let aid = subst[self.1];
-            let limit = self.2;
+            let global_update_limit = self.2;
+            let local_update_limit = self.3;
             let keys_read = MioAnalysis::read_set(egraph, kid);
             // stores a vector of elaborations (Vec<Id>)
             let mut remained_updates = vec![];
@@ -222,6 +223,7 @@ pub fn multi_stage_action(update_limit: usize) -> Vec<RW> {
                 let mut remained = vec![];
                 let mut split = vec![];
                 let mut num_global_writes = HashSet::new();
+                let mut num_phv_writes = HashSet::new();
                 let mut fixed = HashSet::new();
                 for elaboration in egraph[*elabs].nodes[0].children() {
                     // each elaboration
@@ -231,9 +233,9 @@ pub fn multi_stage_action(update_limit: usize) -> Vec<RW> {
                     if MioAnalysis::elaborations(egraph, *elaboration).is_disjoint(keys_read) {
                         match &egraph[*elaboration].data {
                             MioAnalysisData::Action(u) => {
-                                // println!("elaborations: {:?}", u.elaborations);
+                                println!("elaborations: {:?}", u.elaborations);
                                 if u.elaborations.iter().any(|x| x.contains("global.")) {
-                                    if num_global_writes.len() == limit {
+                                    if num_global_writes.len() == global_update_limit {
                                         split.push(*elaboration);
                                         for others in egraph[*elabs].nodes[0].children() {
                                             if others != elaboration
@@ -249,6 +251,10 @@ pub fn multi_stage_action(update_limit: usize) -> Vec<RW> {
                                                         !MioAnalysis::elaborations(egraph, *others)
                                                             .contains(*x)
                                                     });
+                                                    num_phv_writes.retain(|x| {
+                                                        !MioAnalysis::elaborations(egraph, *others)
+                                                            .contains(*x)
+                                                    });
                                                 }
                                                 fixed.insert(others);
                                                 split.push(*others);
@@ -259,7 +265,38 @@ pub fn multi_stage_action(update_limit: usize) -> Vec<RW> {
                                         remained.push(*elaboration);
                                     }
                                 } else {
-                                    remained.push(*elaboration);
+                                    if num_phv_writes.len() == local_update_limit {
+                                        split.push(*elaboration);
+                                        for others in egraph[*elabs].nodes[0].children() {
+                                            if others != elaboration
+                                                && !split.contains(others)
+                                                && MioAnalysis::read_set(egraph, *others)
+                                                    .intersection(&u.elaborations)
+                                                    .count()
+                                                    > 0
+                                                && MioAnalysis::has_stateful_elaboration(
+                                                    egraph, *others,
+                                                )
+                                            {
+                                                if fixed.contains(others) {
+                                                    remained.retain(|x| x != others);
+                                                    num_global_writes.retain(|x| {
+                                                        !MioAnalysis::elaborations(egraph, *others)
+                                                            .contains(*x)
+                                                    });
+                                                    num_phv_writes.retain(|x| {
+                                                        !MioAnalysis::elaborations(egraph, *others)
+                                                            .contains(*x)
+                                                    });
+                                                }
+                                                fixed.insert(others);
+                                                split.push(*others);
+                                            }
+                                        }
+                                    } else {
+                                        num_phv_writes.extend(u.elaborations.iter());
+                                        remained.push(*elaboration);
+                                    }
                                 }
                             }
                             _ => panic!("not an action"),
@@ -269,12 +306,12 @@ pub fn multi_stage_action(update_limit: usize) -> Vec<RW> {
                         split.push(*elaboration);
                     }
                 }
+                println!("remained: {:?}", remained);
+                println!("split: {:?}", split);
+                println!("num_global_writes: {:?}", num_global_writes);
                 if remained.len() == 0 || split.len() == 0 {
                     continue;
                 }
-                // println!("remained: {:?}", remained);
-                // println!("split: {:?}", split);
-                // println!("num_global_writes: {:?}", num_global_writes);
                 assert!(remained.len() + split.len() == egraph[*elabs].nodes[0].children().len());
                 remained_updates.push(remained);
                 splitted_updates.push(split);
@@ -302,7 +339,7 @@ pub fn multi_stage_action(update_limit: usize) -> Vec<RW> {
     return vec![rewrite!(
             "multi-staged-action";
             "(gite ?k ?a)" => 
-            { MultiStagedApplier("?k".parse().unwrap(), "?a".parse().unwrap(), update_limit) })];
+            { MultiStagedApplier("?k".parse().unwrap(), "?a".parse().unwrap(), global_update_limit, phv_update_limit) })];
 }
 
 pub fn ite_to_gite() -> Vec<RW> {

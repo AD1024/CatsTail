@@ -502,7 +502,7 @@ mod test {
             .into_iter()
             .chain(split_table(1))
             .chain(super::stateless::arith_to_alu())
-            .chain(multi_stage_action(1))
+            .chain(multi_stage_action(1, 1))
             .chain(if_else_raw())
             .chain(pred_raw())
             .chain(bool_alu_rewrites())

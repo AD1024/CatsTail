@@ -171,7 +171,7 @@ mod test {
             .into_iter()
             .chain(split_table(1))
             .chain(arith_to_alu())
-            .chain(multi_stage_action(2))
+            .chain(multi_stage_action(2, 1))
             .chain(conditional_assignments())
             .chain(cmp_to_rel())
             .chain(lift_stateless())
