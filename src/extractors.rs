@@ -9,6 +9,7 @@ pub struct GreedyExtractor<'a> {
     pub egraph: &'a EGraph<Mio, MioAnalysis>,
     pub stateful_update_limit: usize,
     pub stateless_update_limit: usize,
+    pub effect_disjoint: bool,
 }
 
 impl<'a> CostFunction<Mio> for GreedyExtractor<'a> {
@@ -44,6 +45,11 @@ impl<'a> CostFunction<Mio> for GreedyExtractor<'a> {
                         || num_stateless_upates.len() > self.stateless_update_limit
                     {
                         c = usize::MAX;
+                    }
+                    if self.effect_disjoint {
+                        if num_stateful_updates.len() > 1 && num_stateless_upates.len() > 1 {
+                            c = usize::MAX;
+                        }
                     }
                 }
                 c

@@ -9,7 +9,7 @@ pub mod ir {
         str::FromStr,
     };
 
-    use egg::{define_language, Analysis, DidMerge, EGraph, Id};
+    use egg::{define_language, Analysis, DidMerge, EGraph, Id, Language};
 
     define_language! {
         pub enum Mio {
@@ -33,6 +33,7 @@ pub mod ir {
             "arith-alu" = ArithAlu(Vec<Id>),
             // (rel-alu ?pred ?a ?b ?imm)
             "rel-alu" = RelAlu(Vec<Id>),
+            "bool-alu" = BoolAlu(Vec<Id>),
             // syntax differs across backends
             // e.g. Intel tofino supports three outputs (with one modification to PHV)
             // (stateful-alu ?op ?dst ?src1 ?src2 ... ?src_n)
@@ -67,6 +68,7 @@ pub mod ir {
             "global" = Global(Id),
             "noop" = NoOp,
             ArithAluOps(ArithAluOps),
+            BoolAluOps(BoolAluOps),
             RelAluOps(RelAluOps),
             Constant(Constant),
             Symbol(String),
@@ -181,6 +183,39 @@ pub mod ir {
         }
     }
 
+    #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+    pub enum BoolAluOps {
+        And,
+        Or,
+        Not,
+        Xor,
+    }
+
+    impl Display for BoolAluOps {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                BoolAluOps::And => write!(f, "alu-and"),
+                BoolAluOps::Or => write!(f, "alu-or"),
+                BoolAluOps::Not => write!(f, "alu-not"),
+                BoolAluOps::Xor => write!(f, "alu-xor"),
+            }
+        }
+    }
+
+    impl FromStr for BoolAluOps {
+        type Err = ();
+
+        fn from_str(s: &str) -> Result<Self, Self::Err> {
+            match s {
+                "alu-and" => Ok(BoolAluOps::And),
+                "alu-or" => Ok(BoolAluOps::Or),
+                "alu-not" => Ok(BoolAluOps::Not),
+                "alu-xor" => Ok(BoolAluOps::Xor),
+                _ => Err(()),
+            }
+        }
+    }
+
     #[derive(Debug, Clone, PartialOrd, Ord, Eq, Hash)]
     pub enum Constant {
         Int(i32),
@@ -248,7 +283,7 @@ pub mod ir {
                     Constant::BitInt(a + b, *s_a.max(s_b))
                 }
                 (Constant::BitInt(a, s_a), Constant::Int(b)) => Constant::BitInt(a + b, *s_a),
-                _ => panic!("Addition of non-integers"),
+                _ => panic!("Addition of non-integers: {:?} + {:?}", self, rhs),
             }
         }
     }
@@ -439,10 +474,10 @@ pub mod ir {
                 (MioType::Int, MioType::BitInt(_))
                 | (MioType::BitInt(_), MioType::Int)
                 | (MioType::Int, MioType::Int) => MioType::Int,
-                (MioType::Int, MioType::Bool)
-                | (MioType::Bool, MioType::Int)
-                | (MioType::BitInt(_), MioType::Bool)
-                | (MioType::Bool, MioType::BitInt(_)) => MioType::Int,
+                // (MioType::Int, MioType::Bool)
+                // | (MioType::Bool, MioType::Int)
+                // | (MioType::BitInt(_), MioType::Bool)
+                // | (MioType::Bool, MioType::BitInt(_)) => MioType::Int,
                 (MioType::List(t1, len_l), MioType::List(t2, len_r)) => {
                     assert_eq!(len_l, len_r);
                     MioType::List(Box::new(Self::type_unification(t1, t2)), *len_l)
@@ -631,6 +666,10 @@ pub mod ir {
                 "!=" => egraph.add(Mio::Neq([operands[0], operands[1]])),
                 _ => panic!("Unknown operator {}", op),
             }
+        }
+
+        pub fn has_leaf(egraph: &egg::EGraph<Mio, MioAnalysis>, id: Id) -> bool {
+            return egraph[id].nodes.iter().any(|x| x.is_leaf());
         }
 
         pub fn has_stateful_elaboration(egraph: &egg::EGraph<Mio, MioAnalysis>, id: Id) -> bool {
@@ -867,6 +906,7 @@ pub mod ir {
                 Mio::Elaborations(actions)
                 | Mio::ArithAlu(actions)
                 | Mio::RelAlu(actions)
+                | Mio::BoolAlu(actions)
                 | Mio::SAlu(actions)
                 | Mio::Actions(actions) => {
                     let mut reads = HashSet::new();
@@ -1040,18 +1080,20 @@ pub mod ir {
                             )
                             .cloned()
                             .collect(),
-                        ret_type,
+                        MioType::Bool,
                         constant,
                         HashSet::new(),
                     )
                 }
-                Mio::ArithAluOps(_) | Mio::RelAluOps(_) => Self::new_action_data(
-                    HashSet::new(),
-                    HashSet::new(),
-                    MioType::Unknown,
-                    None,
-                    HashSet::new(),
-                ),
+                Mio::ArithAluOps(_) | Mio::RelAluOps(_) | Mio::BoolAluOps(_) => {
+                    Self::new_action_data(
+                        HashSet::new(),
+                        HashSet::new(),
+                        MioType::Unknown,
+                        None,
+                        HashSet::new(),
+                    )
+                }
                 Mio::Read([field, pre_state]) => Self::new_action_data(
                     Self::read_set(egraph, *field).clone(),
                     Self::write_set(egraph, *pre_state).clone(),
@@ -1087,7 +1129,7 @@ pub mod ir {
                         //     "Warning: Symbol {:?} not found in {:?}",
                         //     sym, egraph.analysis.gamma
                         // );
-                        MioType::Unknown
+                        MioType::Int
                     },
                     egraph.analysis.context.get(sym).cloned(),
                     HashSet::new(),

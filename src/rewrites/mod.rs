@@ -16,12 +16,7 @@ type EG = EGraph<Mio, MioAnalysis>;
 fn constains_leaf(v: Var) -> impl Fn(&mut EG, Id, &Subst) -> bool {
     move |egraph, _id, subst| {
         let eclass = subst[v];
-        for node in egraph[eclass].nodes.iter() {
-            if node.is_leaf() {
-                return true;
-            }
-        }
-        return false;
+        return MioAnalysis::has_leaf(egraph, eclass);
     }
 }
 
@@ -49,6 +44,16 @@ fn same_elaboration(v1: Var, v2: Var) -> impl Fn(&mut EG, Id, &Subst) -> bool {
         let elaborations1 = MioAnalysis::elaborations(egraph, eclass1);
         let elaborations2 = MioAnalysis::elaborations(egraph, eclass2);
         return elaborations1 == elaborations2;
+    }
+}
+
+fn same_read(v1: Var, v2: Var) -> impl Fn(&mut EG, Id, &Subst) -> bool {
+    move |egraph, _id, subst| {
+        let eclass1 = subst[v1];
+        let eclass2 = subst[v2];
+        let read_set1 = MioAnalysis::read_set(egraph, eclass1);
+        let read_set2 = MioAnalysis::read_set(egraph, eclass2);
+        return read_set1 == read_set2;
     }
 }
 
@@ -232,6 +237,7 @@ impl Applier<Mio, MioAnalysis> for AluApplier {
             .iter()
             .chain(reads.iter())
             .any(|x| x.contains("global."))
+            && self.alu_type == "arith-alu"
         {
             let ops_id = egraph.add(if self.alu_type == "arith-alu" {
                 Mio::ArithAluOps(self.alu_op.parse().unwrap())

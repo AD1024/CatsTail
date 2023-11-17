@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use egg::{rewrite, Applier};
 
@@ -60,7 +60,7 @@ pub fn split_table(n: usize) -> Vec<RW> {
             let a1s = subst[self.1];
             let key_reads = MioAnalysis::read_set(egraph, k1s);
             // the remaining actions must not modify the keys
-            // split out at most n actions a time
+            // remain at most n actions a time
             let mut remained = vec![];
             let mut split = vec![];
             let split_bound = self.2;
@@ -131,29 +131,60 @@ pub fn multi_stage_action(update_limit: usize) -> Vec<RW> {
                 let mut remained = vec![];
                 let mut split = vec![];
                 let mut num_global_writes = HashSet::new();
+                let mut fixed = HashSet::new();
                 for elaboration in egraph[*elabs].nodes[0].children() {
                     // each elaboration
+                    if fixed.contains(elaboration) {
+                        continue;
+                    }
                     if MioAnalysis::elaborations(egraph, *elaboration).is_disjoint(keys_read) {
                         match &egraph[*elaboration].data {
                             MioAnalysisData::Action(u) => {
+                                // println!("elaborations: {:?}", u.elaborations);
                                 if u.elaborations.iter().any(|x| x.contains("global.")) {
                                     if num_global_writes.len() == limit {
                                         split.push(*elaboration);
+                                        for others in egraph[*elabs].nodes[0].children() {
+                                            if others != elaboration
+                                                && !split.contains(others)
+                                                && MioAnalysis::read_set(egraph, *others)
+                                                    .intersection(&u.elaborations)
+                                                    .count()
+                                                    > 0
+                                            {
+                                                if fixed.contains(others) {
+                                                    remained.retain(|x| x != others);
+                                                    num_global_writes.retain(|x| {
+                                                        !MioAnalysis::elaborations(egraph, *others)
+                                                            .contains(*x)
+                                                    });
+                                                }
+                                                fixed.insert(others);
+                                                split.push(*others);
+                                            }
+                                        }
                                     } else {
                                         num_global_writes.extend(u.elaborations.iter());
                                         remained.push(*elaboration);
                                     }
+                                } else {
+                                    remained.push(*elaboration);
                                 }
                             }
-                            _ => remained.push(*elaboration),
+                            _ => panic!("not an action"),
                         }
                     } else {
+                        fixed.insert(elaboration);
                         split.push(*elaboration);
                     }
                 }
                 if remained.len() == 0 || split.len() == 0 {
                     continue;
                 }
+                // println!("remained: {:?}", remained);
+                // println!("split: {:?}", split);
+                // println!("num_global_writes: {:?}", num_global_writes);
+                assert!(remained.len() + split.len() == egraph[*elabs].nodes[0].children().len());
                 remained_updates.push(remained);
                 splitted_updates.push(split);
             }

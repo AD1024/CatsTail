@@ -443,4 +443,30 @@ pub mod example_progs {
         table.add_action("set_pkt".into(), set_pkt);
         return vec![table];
     }
+
+    pub fn stateful_fw() -> Vec<Table> {
+        let set_pkt = block!(
+            assign!("established_tmp" => var!("global.established")),
+            assign!("meta.array_index" => add!(var!("meta.src"), var!("meta.dst"))),
+            ite!(
+                eq!(var!("meta.src"), Expr::Int(20)),
+                assign!("established_tmp" => Expr::Int(1)),
+                block!(ite!(
+                    eq!(var!("meta.dst"), Expr::Int(20)),
+                    ite!(
+                        eq!(var!("established_tmp"), Expr::Int(0)),
+                        assign!("meta.drop" => Expr::Int(1)),
+                        assign!("meta.drop" => Expr::Int(0))
+                    ),
+                    block!()
+                ))
+            )
+        );
+        let mut table = Table::new(
+            "stateful_fw_table".to_string(),
+            vec!["meta.stateful_fw_key".to_string()],
+        );
+        table.add_action("set_pkt".into(), set_pkt);
+        return vec![table];
+    }
 }

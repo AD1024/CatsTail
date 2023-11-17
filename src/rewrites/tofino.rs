@@ -186,6 +186,7 @@ mod test {
             egraph: &runner.egraph,
             stateful_update_limit: 2,
             stateless_update_limit: 1,
+            effect_disjoint: false,
         };
         let extractor = Extractor::new(&runner.egraph, greedy_ext);
         let (best_cost, best) = extractor.find_best(root);
