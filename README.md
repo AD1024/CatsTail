@@ -5,10 +5,10 @@ TODO: fill in
 TODO: fill in
 ## General-purpose rewrite rules
 TODO: fill in
-Table transformations, algebraic simplifications, predicate simplifications, etc.
+[Table transformations](src/rewrites/table_transformations.rs), [algebraic simplifications](src/rewrites/alg_simp.rs), [predicate simplifications](src/rewrites/alg_simp.rs), etc.
 ## Target-dependent rewrites and grammar-guided rewrites
 TODO: fill in
-[Tofino backend](rewrites/tofino.rs) and [Domino backend](rewrites/domino.rs)
+[Tofino backend](src/rewrites/tofino.rs) and [Domino backend](src/rewrites/domino.rs)
 ## Extraction
 TODO: fill in
 Extraction with target constraints.
