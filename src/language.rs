@@ -685,6 +685,35 @@ pub mod ir {
                 .count()
                 > 0;
         }
+
+        pub fn aggregate_elaborators(
+            egraph: &egg::EGraph<Mio, MioAnalysis>,
+            actions_id: Id,
+        ) -> Vec<Vec<Id>> {
+            // Given an action node, return a list of elaborations in each action
+            // Note the structure of an action node is
+            // (actions
+            //      (elaboration (E e1) (E e2) ...)
+            //      (elaboration (E e3) (E e4) ...)
+            // )
+            let mut result = vec![];
+            if let Mio::Actions(chs) = &egraph[actions_id].nodes[0] {
+                // Each elaboration
+                result = chs
+                    .iter()
+                    .map(|x| {
+                        if let Mio::Elaborations(echs) = &egraph[*x].nodes[0] {
+                            echs.clone()
+                        } else {
+                            panic!("{:?} is not an elaboration node", egraph[*x].nodes);
+                        }
+                    })
+                    .collect();
+            } else {
+                panic!("{:?} is not an action node", egraph[actions_id].nodes);
+            }
+            return result;
+        }
     }
 
     #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -916,9 +945,10 @@ pub mod ir {
                         match u {
                             MioAnalysisData::Action(u) => {
                                 reads = reads.union(&u.reads).cloned().collect();
-                                writes = writes.union(&u.writes).cloned().collect();
                                 elaborations =
                                     elaborations.union(&u.elaborations).cloned().collect();
+                                // Write set of elaborations should be elaborated fields from the underlying elaborators
+                                writes = elaborations.clone();
                             }
                             MioAnalysisData::Empty => (),
                             _ => {

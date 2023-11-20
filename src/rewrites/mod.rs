@@ -1,3 +1,5 @@
+use std::collections::{HashMap, HashSet};
+
 use egg::{rewrite, Applier, EGraph, Id, Language, Pattern, Rewrite, Searcher, Subst, Var};
 
 use crate::language::{
@@ -484,7 +486,45 @@ pub fn lift_stateless() -> Vec<RW> {
     // TODO: add 2 more rewrits:
     // 1. lift stateless updates to previous stage or next stage
     // 2. Make stateless computation to elaborate to some PHV fields in the same stage
-    vec![rewrite!("lift-comp";
+    struct LiftStatelessUpdate {
+        keys: Var,
+        actions: Var,
+        is_prepend: bool,
+    }
+
+    impl Applier<Mio, MioAnalysis> for LiftStatelessUpdate {
+        fn apply_one(
+            &self,
+            egraph: &mut EGraph<Mio, MioAnalysis>,
+            eclass: Id,
+            subst: &Subst,
+            searcher_ast: Option<&egg::PatternAst<Mio>>,
+            rule_name: egg::Symbol,
+        ) -> Vec<Id> {
+            let kid = subst[self.keys];
+            let action_id = subst[self.actions];
+            todo!();
+        }
+    }
+    vec![
+        // If a computation is the form of (op ?x ?y) where one of ?x ?y is a global update
+        // lift the computation of the stateless one to the previous stage and elaborate to
+        // some PHV field
+        rewrite!("lift-comp";
                 "(gite ?keys ?actions)" =>
-                {  StatelessLiftApplier("?keys".parse().unwrap(), "?actions".parse().unwrap()) })]
+                {  StatelessLiftApplier("?keys".parse().unwrap(), "?actions".parse().unwrap()) }),
+        // If an update to PHV field is fully stateless (i.e. no read to global variables)
+        // then we can lift it to the previous stage if the elaborated field is not in the read set of keys;
+        // if all other updates does not modify the read set of the stateless update, we can also lift it to the next stage.
+        // This rule lift as many updates as possible (as long as it does not break the above constraints)
+        // rewrite!("lift-stateless-update-prev";
+        // "(gite ?keys ?actions)" =>
+        // {
+        //     LiftStatelessUpdate {
+        //         keys: "?keys".parse().unwrap(),
+        //         actions: "?actions".parse().unwrap(),
+        //         is_prepend: true,
+        //     }
+        // }),
+    ]
 }

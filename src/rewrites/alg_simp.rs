@@ -59,6 +59,7 @@ pub fn predicate_rewrites() -> Vec<RW> {
         rewrite!("ite-true"; "(ite true ?t1 ?t2)" => "?t1"),
         rewrite!("ite-false"; "(ite false ?t1 ?t2)" => "?t2"),
         rewrite!("ite-same"; "(ite ?c ?t ?t)" => "?t"),
+        rewrite!("ite-combine"; "(ite ?c1 (ite ?c2 ?b1 ?d) ?d)" => "(ite (land ?c1 ?c2) ?b1 ?d)"),
         rewrite!("ite-intro"; "?t" => "(ite true ?t ?t)"
                 if is_integer("?t".parse().unwrap())),
         rewrite!("trivial-comp"; "true" => "(= 0 0)"),
