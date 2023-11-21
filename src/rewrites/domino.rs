@@ -497,6 +497,7 @@ mod test {
     };
 
     fn test_domino_mapping(prog: Vec<Table>, filename: &'static str) {
+        let start_time = std::time::Instant::now();
         let (egraph, root) = tables_to_egraph(prog);
         let rewrites = seq_elim()
             .into_iter()
@@ -527,8 +528,10 @@ mod test {
         };
         let extractor = Extractor::new(&runner.egraph, greedy_ext);
         let (best_cost, best) = extractor.find_best(root);
+        let end_time = std::time::Instant::now();
         println!("best cost: {}", best_cost);
         println!("best: {}", best.pretty(80));
+        println!("time: {:?}", end_time - start_time);
     }
 
     #[test]
@@ -565,5 +568,10 @@ mod test {
     #[test]
     fn test_domino_marple_nmo() {
         test_domino_mapping(crate::p4::example_progs::marple_nmo(), "marple_nmo.pdf");
+    }
+
+    #[test]
+    fn test_domino_flowlet() {
+        test_domino_mapping(crate::p4::example_progs::flowlet(), "flowlet.pdf");
     }
 }
