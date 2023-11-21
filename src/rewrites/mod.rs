@@ -307,7 +307,6 @@ pub fn lift_stateless() -> Vec<RW> {
             let action_wrapper_id = subst[self.1];
             let mut lhs_action_elabs = vec![];
             let mut rhs_action_elabs = vec![];
-            let mut changed: Vec<Id> = vec![];
             // copy to avoid holding mut and immut references
             // (actions (elaborations (E e) ...))
             for action_wrapper in egraph[action_wrapper_id]
@@ -476,10 +475,7 @@ pub fn lift_stateless() -> Vec<RW> {
                 let rhs_table_id = egraph.add(Mio::GIte([keys, action_id]));
                 // LHS before RHS, set value to the binding
                 let seq_id = egraph.add(Mio::Seq([lhs_table_id, rhs_table_id]));
-                vec![seq_id]
-                    .into_iter()
-                    .chain(changed.into_iter())
-                    .collect()
+                vec![seq_id].into_iter().collect()
             }
         }
     }
@@ -498,12 +494,86 @@ pub fn lift_stateless() -> Vec<RW> {
             egraph: &mut EGraph<Mio, MioAnalysis>,
             eclass: Id,
             subst: &Subst,
-            searcher_ast: Option<&egg::PatternAst<Mio>>,
-            rule_name: egg::Symbol,
+            _searcher_ast: Option<&egg::PatternAst<Mio>>,
+            _rule_name: egg::Symbol,
         ) -> Vec<Id> {
             let kid = subst[self.keys];
             let action_id = subst[self.actions];
-            todo!();
+            // first aggregate global updates; these must be pinned
+            let mut remain = vec![];
+            let mut split = vec![];
+            let reads = MioAnalysis::read_set(egraph, kid);
+            for elaborations in MioAnalysis::aggregate_elaborators(egraph, action_id) {
+                let mut current_remain = elaborations
+                    .iter()
+                    .cloned()
+                    .filter(|x| MioAnalysis::has_stateful_elaboration(egraph, *x))
+                    .collect::<Vec<_>>();
+                if current_remain.len() == 0 {
+                    remain.push(elaborations);
+                    continue;
+                }
+                let mut current_split = vec![];
+                let mut remain_reads = current_remain
+                    .iter()
+                    .map(|x| MioAnalysis::read_set(egraph, *x).clone())
+                    .reduce(|a, b| a.union(&b).cloned().collect())
+                    .unwrap();
+                let mut remain_writes = current_remain
+                    .iter()
+                    .map(|x| MioAnalysis::elaborations(egraph, *x).clone())
+                    .reduce(|a, b| a.union(&b).cloned().collect())
+                    .unwrap();
+                for elaborator in elaborations.iter() {
+                    if MioAnalysis::has_stateful_elaboration(egraph, *elaborator) {
+                        continue;
+                    }
+                    let stateless_reads = MioAnalysis::read_set(egraph, *elaborator);
+                    let stateless_writes = MioAnalysis::elaborations(egraph, *elaborator);
+                    if self.is_prepend {
+                        // a stateless update can be lifted to the previous stage if
+                        // 1. it does not read global registers in the current stage
+                        // 2. it does not write variables in `remain_reads`
+                        if MioAnalysis::has_stateful_reads(egraph, *elaborator)
+                            || !stateless_writes.is_disjoint(&reads)
+                            || !stateless_writes.is_disjoint(&remain_reads)
+                        {
+                            current_remain.push(*elaborator);
+                            remain_reads = remain_reads.union(&stateless_reads).cloned().collect();
+                            remain_writes =
+                                remain_writes.union(&stateless_writes).cloned().collect();
+                        } else {
+                            current_split.push(*elaborator);
+                        }
+                    } else {
+                        // a stateless update can be lifted to the next stage if
+                        // 1. remain_writes does not modify keys
+                        // 2. remain_writes does not modify stateless_reads
+                        if !remain_writes.is_disjoint(&reads)
+                            || !remain_writes.is_disjoint(&stateless_reads)
+                        {
+                            current_remain.push(*elaborator);
+                            remain_reads = remain_reads.union(&stateless_reads).cloned().collect();
+                            remain_writes =
+                                remain_writes.union(&stateless_writes).cloned().collect();
+                        } else {
+                            current_split.push(*elaborator);
+                        }
+                    }
+                }
+                if current_remain.len() == 0 || current_split.len() == 0 {
+                    continue;
+                }
+                debug_assert!(current_remain.len() + current_split.len() == elaborations.len());
+                remain.push(current_remain);
+                split.push(current_split);
+            }
+            let table_name = MioAnalysis::get_table_name(egraph, eclass)
+                .unwrap_or(format!("lifted-{}", egraph.analysis.new_table_name(None)));
+            let lhs_table = MioAnalysis::build_table(egraph, table_name.clone(), kid, split);
+            let rhs_table = MioAnalysis::build_table(egraph, table_name, kid, remain);
+            let seq_id = egraph.add(Mio::Seq([lhs_table, rhs_table]));
+            vec![seq_id]
         }
     }
     vec![

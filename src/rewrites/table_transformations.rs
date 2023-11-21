@@ -190,8 +190,14 @@ pub fn split_table(n: usize) -> Vec<RW> {
             let split_actions = split.iter().map(|i| actions[*i]).collect::<Vec<_>>();
             let lhs_action_id = egraph.add(Mio::Actions(remaining_actions));
             let rhs_action_id = egraph.add(Mio::Actions(split_actions));
+            let table_name = format!(
+                "split-{}",
+                MioAnalysis::get_table_name(egraph, eclass).unwrap()
+            );
             let lhs_table = egraph.add(Mio::GIte([k1s, lhs_action_id]));
             let rhs_table = egraph.add(Mio::GIte([k1s, rhs_action_id]));
+            MioAnalysis::set_table_name(egraph, lhs_table, format!("{}-lhs", table_name));
+            MioAnalysis::set_table_name(egraph, rhs_table, format!("{}-rhs", table_name));
             // (seq (gite ?k1s ?remaining) (gite ?k1s ?split))
             let seq_id: Id = egraph.add(Mio::Seq([lhs_table, rhs_table]));
             egraph.union(eclass, seq_id);

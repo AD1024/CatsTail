@@ -186,7 +186,7 @@ mod test {
         // runner.egraph.dot().to_pdf(filename).unwrap();
         let greedy_ext = GreedyExtractor {
             egraph: &runner.egraph,
-            stateful_update_limit: 1,
+            stateful_update_limit: 2,
             stateless_update_limit: 1,
             effect_disjoint: false,
         };

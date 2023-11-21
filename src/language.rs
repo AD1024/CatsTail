@@ -465,6 +465,20 @@ pub mod ir {
             }
         }
 
+        pub fn set_table_name(
+            egraph: &mut egg::EGraph<Mio, Self>,
+            id: Id,
+            table_name: String,
+        ) -> bool {
+            match &mut egraph[id].data {
+                MioAnalysisData::Dataflow(RWAnalysis { table_name: t, .. }) => {
+                    *t = Some(table_name);
+                    true
+                }
+                _ => false,
+            }
+        }
+
         pub fn type_unification(lhs_ty: &MioType, rhs_ty: &MioType) -> MioType {
             match (lhs_ty, rhs_ty) {
                 (MioType::Bool, MioType::Bool) => MioType::Bool,
@@ -672,6 +686,12 @@ pub mod ir {
             return egraph[id].nodes.iter().any(|x| x.is_leaf());
         }
 
+        pub fn has_stateful_reads(egraph: &egg::EGraph<Mio, MioAnalysis>, id: Id) -> bool {
+            return Self::read_set(egraph, id)
+                .iter()
+                .any(|x| x.contains("global."));
+        }
+
         pub fn has_stateful_elaboration(egraph: &egg::EGraph<Mio, MioAnalysis>, id: Id) -> bool {
             return Self::elaborations(egraph, id)
                 .iter()
@@ -684,6 +704,36 @@ pub mod ir {
                 .filter(|x| !x.contains("global."))
                 .count()
                 > 0;
+        }
+
+        pub fn unwrap_elaborator(egraph: &egg::EGraph<Mio, MioAnalysis>, id: Id) -> Id {
+            if let Mio::Elaborate([_, elaborator]) = &egraph[id].nodes[0] {
+                *elaborator
+            } else {
+                panic!("{:?} is not an elaborator", egraph[id].nodes);
+            }
+        }
+
+        pub fn build_table(
+            egraph: &mut egg::EGraph<Mio, MioAnalysis>,
+            table_name: String,
+            keys_id: Id,
+            elaborators: Vec<Vec<Id>>,
+        ) -> Id {
+            let name_id = egraph.add(Mio::Symbol(table_name.clone()));
+            let elaboration_ids = elaborators
+                .into_iter()
+                .map(|x| {
+                    let elaboration_id = x
+                        .into_iter()
+                        .map(|y| egraph.add(Mio::Elaborate([name_id, y])))
+                        .collect::<Vec<_>>();
+                    egraph.add(Mio::Elaborations(elaboration_id))
+                })
+                .collect::<Vec<_>>();
+            let action_id = egraph.add(Mio::Actions(elaboration_ids));
+            let table_id = egraph.add(Mio::GIte([keys_id, action_id]));
+            table_id
         }
 
         pub fn aggregate_elaborators(
