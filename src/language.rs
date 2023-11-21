@@ -719,14 +719,23 @@ pub mod ir {
             table_name: String,
             keys_id: Id,
             elaborators: Vec<Vec<Id>>,
+            elaborations: Vec<Vec<HashSet<String>>>,
         ) -> Id {
+            assert_eq!(elaborators.len(), elaborations.len());
             let name_id = egraph.add(Mio::Symbol(table_name.clone()));
             let elaboration_ids = elaborators
                 .into_iter()
-                .map(|x| {
+                .zip(elaborations.into_iter())
+                .map(|(x, e)| {
+                    debug_assert!(x.len() == e.len());
                     let elaboration_id = x
                         .into_iter()
-                        .map(|y| egraph.add(Mio::Elaborate([name_id, y])))
+                        .zip(e.into_iter())
+                        .map(|(y, v)| {
+                            let elaborator_id = egraph.add(Mio::Elaborate([name_id, y]));
+                            Self::set_elaboration(egraph, elaborator_id, v);
+                            elaborator_id
+                        })
                         .collect::<Vec<_>>();
                     egraph.add(Mio::Elaborations(elaboration_id))
                 })

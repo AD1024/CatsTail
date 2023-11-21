@@ -160,7 +160,7 @@ mod test {
         rewrites::{
             domino::stateless::arith_to_alu,
             lift_stateless,
-            table_transformations::{multi_stage_action, seq_elim, split_table, waw_elim},
+            table_transformations::{multi_stage_action, seq_elim, waw_elim},
             tofino::{stateful::conditional_assignments, stateless::cmp_to_rel},
         },
     };
@@ -170,9 +170,7 @@ mod test {
         let (egraph, root) = tables_to_egraph(prog);
         let rewrites = seq_elim()
             .into_iter()
-            .chain(split_table(1))
             .chain(arith_to_alu())
-            .chain(multi_stage_action(2, 1))
             .chain(conditional_assignments())
             .chain(cmp_to_rel())
             .chain(lift_stateless())
@@ -186,8 +184,8 @@ mod test {
         // runner.egraph.dot().to_pdf(filename).unwrap();
         let greedy_ext = GreedyExtractor {
             egraph: &runner.egraph,
-            stateful_update_limit: 2,
-            stateless_update_limit: 1,
+            stateful_update_limit: usize::MAX,
+            stateless_update_limit: usize::MAX,
             effect_disjoint: false,
         };
         let extractor = Extractor::new(&runner.egraph, greedy_ext);

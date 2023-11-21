@@ -217,10 +217,13 @@ pub mod stateful {
                 let evar = if elaborations.len() == 0 {
                     "tmp".to_string()
                 } else {
-                    elaborations.iter().next().unwrap().clone()
+                    format!(
+                        "(arith-alu alu-global {})",
+                        elaborations.iter().next().unwrap().clone()
+                    )
                 };
                 let pattern = format!(
-                    "(stateful-alu alu-ite (arith-alu alu-global {})
+                    "(stateful-alu alu-ite {}
                     (rel-alu {} {} {})
                     (+ {} {})
                     (+ {} {}))",
@@ -292,10 +295,13 @@ pub mod stateful {
                 let evar = if elaborations.len() == 0 {
                     "tmp".to_string()
                 } else {
-                    elaborations.iter().next().unwrap().clone()
+                    format!(
+                        "(arith-alu alu-global {})",
+                        elaborations.iter().next().unwrap().clone()
+                    )
                 };
                 let pattern = format!(
-                    "(stateful-alu alu-ite (arith-alu alu-global {})
+                    "(stateful-alu alu-ite {}
                         (rel-alu {} {} {})
                         (stateful-alu alu-ite tmp
                             (rel-alu {} {} {})
@@ -490,9 +496,7 @@ mod test {
             alg_simp::{alg_simpl, predicate_rewrites, rel_comp_rewrites},
             domino::stateful::{bool_alu_rewrites, if_else_raw, nested_ifs, pred_raw},
             lift_stateless,
-            table_transformations::{
-                multi_stage_action, parallelize_independent_tables, seq_elim, split_table,
-            },
+            table_transformations::{multi_stage_action, parallelize_independent_tables, seq_elim},
         },
     };
 
@@ -501,7 +505,6 @@ mod test {
         let (egraph, root) = tables_to_egraph(prog);
         let rewrites = seq_elim()
             .into_iter()
-            .chain(split_table(1))
             .chain(super::stateless::arith_to_alu())
             .chain(multi_stage_action(1, 1))
             .chain(if_else_raw())
@@ -522,8 +525,8 @@ mod test {
         // runner.egraph.dot().to_pdf(filename).unwrap();
         let greedy_ext = GreedyExtractor {
             egraph: &runner.egraph,
-            stateful_update_limit: 1,
-            stateless_update_limit: 1,
+            stateful_update_limit: usize::MAX,
+            stateless_update_limit: usize::MAX,
             effect_disjoint: false,
         };
         let extractor = Extractor::new(&runner.egraph, greedy_ext);
