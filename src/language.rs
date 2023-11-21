@@ -21,8 +21,8 @@ pub mod ir {
             "keys" = Keys(Vec<Id>),
             "actions" = Actions(Vec<Id>),
             "elaborations" = Elaborations(Vec<Id>),
-            // (E <table> <expr>)
-            "E" = Elaborate([Id; 2]),
+            // (E <table> <elaborate var> <expr>)
+            "E" = Elaborate([Id; 3]),
             // putting tables in the same stage; equivalent to T1 || T2
             // (join ?t1 ?t2)
             "join" = Join([Id; 2]),
@@ -649,6 +649,43 @@ pub mod ir {
             }
         }
 
+        pub fn to_arith_alu_op(op_name: &String) -> Option<ArithAluOps> {
+            op_name.parse::<ArithAluOps>().ok()
+        }
+
+        pub fn to_rel_alu_op(op_name: &String) -> Option<RelAluOps> {
+            op_name.parse::<RelAluOps>().ok()
+        }
+
+        pub fn get_alu_op(egraph: &egg::EGraph<Mio, MioAnalysis>, id: Id) -> Result<String, ()> {
+            match &egraph[id].nodes[0] {
+                Mio::ArithAluOps(op) => Ok(op.to_string()),
+                Mio::RelAluOps(op) => Ok(op.to_string()),
+                _ => Err(()),
+            }
+        }
+
+        /// decompose an alu operation into operator + operands (id)
+        pub fn decompose_alu_ops(
+            egraph: &egg::EGraph<Mio, MioAnalysis>,
+            id: Id,
+        ) -> Result<(String, Vec<Id>), ()> {
+            for node in &egraph[id].nodes {
+                match node {
+                    Mio::ArithAlu(ops) => {
+                        let op = Self::get_alu_op(egraph, ops[0])?;
+                        return Ok((op, ops[1..].to_vec()));
+                    }
+                    Mio::RelAlu(ops) => {
+                        let op = Self::get_alu_op(egraph, ops[0])?;
+                        return Ok((op, ops[1..].to_vec()));
+                    }
+                    _ => (),
+                }
+            }
+            Err(())
+        }
+
         pub fn add_expr(
             egraph: &mut egg::EGraph<Mio, MioAnalysis>,
             op: &'static str,
@@ -706,8 +743,9 @@ pub mod ir {
                 > 0;
         }
 
+        // Get underlying computation of an elaborator
         pub fn unwrap_elaborator(egraph: &egg::EGraph<Mio, MioAnalysis>, id: Id) -> Id {
-            if let Mio::Elaborate([_, elaborator]) = &egraph[id].nodes[0] {
+            if let Mio::Elaborate([_, _, elaborator]) = &egraph[id].nodes[0] {
                 *elaborator
             } else {
                 panic!("{:?} is not an elaborator", egraph[id].nodes);
@@ -732,7 +770,9 @@ pub mod ir {
                         .into_iter()
                         .zip(e.into_iter())
                         .map(|(y, v)| {
-                            let elaborator_id = egraph.add(Mio::Elaborate([name_id, y]));
+                            let elaborate_var = v.iter().next().unwrap();
+                            let evar_id = egraph.add(Mio::Symbol(elaborate_var.clone()));
+                            let elaborator_id = egraph.add(Mio::Elaborate([name_id, evar_id, y]));
                             Self::set_elaboration(egraph, elaborator_id, v);
                             elaborator_id
                         })
@@ -887,13 +927,13 @@ pub mod ir {
 
         fn make(egraph: &egg::EGraph<Mio, Self>, enode: &Mio) -> Self::Data {
             match enode {
-                Mio::Elaborate([_, e]) => {
+                Mio::Elaborate([_, v, e]) => {
                     return MioAnalysis::new_action_data(
                         MioAnalysis::read_set(egraph, *e).clone(),
                         MioAnalysis::write_set(egraph, *e).clone(),
                         MioAnalysis::get_type(egraph, *e),
                         MioAnalysis::get_constant(egraph, *e),
-                        MioAnalysis::elaborations(egraph, *e).clone(),
+                        MioAnalysis::read_set(egraph, *v).clone(),
                     );
                 }
                 Mio::NoOp => MioAnalysisData::Dataflow(Default::default()),
@@ -1584,7 +1624,8 @@ pub mod transforms {
                     let expr = recexpr[id].build_recexpr(|id| recexpr[id].clone());
                     println!("{} =>\n{}", k, expr.pretty(80));
                     let egraph_id = egraph.add_expr(&expr);
-                    let egraph_id = egraph.add(Mio::Elaborate([table_name_id, egraph_id]));
+                    let evar_id = egraph.add(Mio::Symbol(k.clone()));
+                    let egraph_id = egraph.add(Mio::Elaborate([table_name_id, evar_id, egraph_id]));
                     if let MioAnalysisData::Action(u) = &mut egraph[egraph_id].data {
                         println!("Action update {}:\n{:?}", k, u);
                         u.writes = u

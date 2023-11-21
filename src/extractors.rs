@@ -12,6 +12,17 @@ pub struct GreedyExtractor<'a> {
     pub effect_disjoint: bool,
 }
 
+impl<'a> GreedyExtractor<'a> {
+    pub fn new(egraph: &'a EGraph<Mio, MioAnalysis>) -> Self {
+        Self {
+            egraph,
+            stateful_update_limit: usize::MAX,
+            stateless_update_limit: usize::MAX,
+            effect_disjoint: false,
+        }
+    }
+}
+
 impl<'a> CostFunction<Mio> for GreedyExtractor<'a> {
     type Cost = usize;
 
@@ -23,7 +34,9 @@ impl<'a> CostFunction<Mio> for GreedyExtractor<'a> {
         // increasing the depth of the tree.
         let base: usize = match enode {
             Mio::Join(_) => 0,
-            Mio::ArithAlu(_) | Mio::RelAlu(_) | Mio::SAlu(_) => 1,
+            Mio::ArithAlu(_) => 1,
+            Mio::RelAlu(_) => 1,
+            Mio::SAlu(_) => 1,
             Mio::ArithAluOps(_) | Mio::RelAluOps(_) => 0,
             // Mio::Ite(_) => 1,
             Mio::GIte(_) => 1,
@@ -54,7 +67,23 @@ impl<'a> CostFunction<Mio> for GreedyExtractor<'a> {
                 }
                 c
             }
-            Mio::Elaborate(_) => 0,
+            Mio::Elaborate([_, v, e]) => {
+                if MioAnalysis::has_stateful_reads(self.egraph, *v) {
+                    if self.egraph[*e].nodes.iter().any(|n| {
+                        if let Mio::SAlu(_) = n {
+                            true
+                        } else {
+                            false
+                        }
+                    }) {
+                        0
+                    } else {
+                        usize::MAX
+                    }
+                } else {
+                    0
+                }
+            }
             Mio::Keys(_) => 1,
             Mio::Seq(_) => 1,
             Mio::Symbol(_) => 0,

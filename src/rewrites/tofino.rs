@@ -71,16 +71,19 @@ pub mod stateful {
             alu_type: &'static str,
             alu_op: &'static str,
             operands: Vec<Var>,
+            table_id: Var,
         }
         impl TofinoStatefulAluApplier {
             fn new(
                 alu_type: &'static str,
                 alu_op: &'static str,
+                table_id: &'static str,
                 operands: Vec<&'static str>,
             ) -> Self {
                 Self {
                     alu_type,
                     alu_op,
+                    table_id: table_id.parse().unwrap(),
                     operands: operands.into_iter().map(|s| s.parse().unwrap()).collect(),
                 }
             }
@@ -94,10 +97,7 @@ pub mod stateful {
                 searcher_ast: Option<&egg::PatternAst<Mio>>,
                 rule_name: egg::Symbol,
             ) -> Vec<Id> {
-                let elaborations = match &egraph[eclass].data {
-                    MioAnalysisData::Action(u) => u.elaborations.clone(),
-                    _ => panic!("not an action"),
-                };
+                let elaborations = MioAnalysis::elaborations(egraph, eclass).clone();
                 assert!(
                     elaborations.len() <= 1,
                     "conditional assignments should have at most one elaboration"
@@ -107,9 +107,6 @@ pub mod stateful {
                 } else {
                     elaborations.iter().cloned().next().unwrap()
                 };
-                let read_set = MioAnalysis::read_set(egraph, eclass).clone();
-                let write_set = MioAnalysis::write_set(egraph, eclass).clone();
-                let elaborations = MioAnalysis::elaborations(egraph, eclass).clone();
                 let alu_op_id = egraph.add(if self.alu_type == "arith-alu" {
                     Mio::ArithAluOps(self.alu_op.parse().unwrap())
                 } else {
@@ -123,28 +120,22 @@ pub mod stateful {
                         .chain(operands.iter().cloned())
                         .collect(),
                 ));
-                match &mut egraph[salu_id].data {
-                    MioAnalysisData::Action(u) => {
-                        u.reads = read_set;
-                        u.writes = write_set;
-                        u.elaborations = elaborations;
-                    }
-                    _ => (),
-                }
-                let f = egraph.union(salu_id, eclass);
+                let elaborator_id =
+                    egraph.add(Mio::Elaborate([subst[self.table_id], elab_id, salu_id]));
+                let f = egraph.union(elaborator_id, eclass);
                 if f {
-                    vec![eclass, salu_id]
+                    vec![eclass, elaborator_id]
                 } else {
                     vec![]
                 }
             }
         }
         vec![rewrite!("cond-assign-to-salu";
-                    "(ite ?rel ?lhs ?rhs)" =>
-                    { TofinoStatefulAluApplier::new("arith-alu", "alu-ite", vec!["?rel", "?lhs", "?rhs"]) }
-                if is_n_depth_mapped("?rel".parse().unwrap(), 2, None)
-                if is_n_depth_mapped("?lhs".parse().unwrap(), 1, None)
-                if is_n_depth_mapped("?rhs".parse().unwrap(), 1, None))]
+                    "(E ?t ?v (ite ?rel ?lhs ?rhs))" =>
+                    { TofinoStatefulAluApplier::new("arith-alu", "alu-ite", "?t", vec!["?rel", "?lhs", "?rhs"]) }
+                if is_n_depth_mapped("?rel".parse().unwrap(), 2, Some(false))
+                if is_n_depth_mapped("?lhs".parse().unwrap(), 1, Some(false))
+                if is_n_depth_mapped("?rhs".parse().unwrap(), 1, Some(false)))]
     }
 }
 
@@ -159,7 +150,7 @@ mod test {
         p4::{example_progs, p4ir::Table},
         rewrites::{
             domino::stateless::arith_to_alu,
-            lift_stateless,
+            elaborator_conversion, lift_stateless,
             table_transformations::{multi_stage_action, seq_elim, waw_elim},
             tofino::{stateful::conditional_assignments, stateless::cmp_to_rel},
         },
@@ -172,8 +163,9 @@ mod test {
             .into_iter()
             .chain(arith_to_alu())
             .chain(conditional_assignments())
+            .chain(elaborator_conversion())
             .chain(cmp_to_rel())
-            .chain(lift_stateless())
+            // .chain(lift_stateless())
             .chain(waw_elim())
             .collect::<Vec<_>>();
         let runner = Runner::default()
@@ -182,12 +174,7 @@ mod test {
             .with_time_limit(Duration::from_secs(10));
         let runner = runner.run(rewrites.iter());
         // runner.egraph.dot().to_pdf(filename).unwrap();
-        let greedy_ext = GreedyExtractor {
-            egraph: &runner.egraph,
-            stateful_update_limit: usize::MAX,
-            stateless_update_limit: usize::MAX,
-            effect_disjoint: false,
-        };
+        let greedy_ext = GreedyExtractor::new(&runner.egraph);
         let extractor = Extractor::new(&runner.egraph, greedy_ext);
         let (best_cost, best) = extractor.find_best(root);
         let end_time = std::time::Instant::now();

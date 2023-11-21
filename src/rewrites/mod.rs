@@ -206,6 +206,67 @@ fn is_n_depth_mapped(
     }
 }
 
+/// Map (E ?t ?expr) to Alu operators (for ?expr)
+/// will decide whether to map to stateful or stay stateless
+struct ElaboratorConversion {
+    table_id: Var,
+    expr: Var,
+}
+
+impl ElaboratorConversion {
+    fn new(table_id: &'static str, expr: &'static str) -> Self {
+        Self {
+            table_id: table_id.parse().unwrap(),
+            expr: expr.parse().unwrap(),
+        }
+    }
+}
+
+impl Applier<Mio, MioAnalysis> for ElaboratorConversion {
+    fn apply_one(
+        &self,
+        egraph: &mut EGraph<Mio, MioAnalysis>,
+        eclass: Id,
+        subst: &Subst,
+        searcher_ast: Option<&egg::PatternAst<Mio>>,
+        rule_name: egg::Symbol,
+    ) -> Vec<Id> {
+        let table_id = subst[self.table_id];
+        let expr_id = subst[self.expr];
+        let elaborations = MioAnalysis::elaborations(egraph, eclass).clone();
+        let (op, args) = MioAnalysis::decompose_alu_ops(egraph, expr_id).unwrap();
+        if MioAnalysis::has_stateful_elaboration(egraph, eclass) {
+            // map to stateful alu
+            let output_var_id =
+                egraph.add(Mio::Symbol(elaborations.iter().next().unwrap().clone()));
+            let op_id = if let Some(arith_op) = MioAnalysis::to_arith_alu_op(&op) {
+                egraph.add(Mio::ArithAluOps(arith_op))
+            } else {
+                egraph.add(Mio::RelAluOps(op.parse().unwrap()))
+            };
+            let alu_id = egraph.add(Mio::SAlu(
+                vec![op_id, output_var_id]
+                    .into_iter()
+                    .chain(args.into_iter())
+                    .collect(),
+            ));
+            let elaborator_id = egraph.add(Mio::Elaborate([table_id, output_var_id, alu_id]));
+            MioAnalysis::set_elaboration(egraph, elaborator_id, elaborations);
+            egraph.union(eclass, elaborator_id);
+            return vec![eclass, elaborator_id];
+        }
+        return vec![];
+    }
+}
+
+pub fn elaborator_conversion() -> Vec<RW> {
+    vec![rewrite!("elaborator-conversion";
+            "(E ?t ?v ?expr)" => {
+                ElaboratorConversion::new("?t", "?expr")
+            }
+            if is_mapped("?expr".parse().unwrap(), Some(false)))]
+}
+
 struct AluApplier {
     alu_type: &'static str,
     alu_op: &'static str,
@@ -231,58 +292,18 @@ impl Applier<Mio, MioAnalysis> for AluApplier {
         searcher_ast: Option<&egg::PatternAst<Mio>>,
         rule_name: egg::Symbol,
     ) -> Vec<Id> {
-        let (elaborations, reads) = match &egraph[eclass].data {
-            MioAnalysisData::Action(u) => (u.elaborations.clone(), u.reads.clone()),
-            _ => panic!("not an action"),
-        };
-        if elaborations
-            .iter()
-            .chain(reads.iter())
-            .any(|x| x.contains("global."))
-            && self.alu_type == "arith-alu"
-        {
-            let ops_id = egraph.add(if self.alu_type == "arith-alu" {
-                Mio::ArithAluOps(self.alu_op.parse().unwrap())
-            } else {
-                Mio::RelAluOps(self.alu_op.parse().unwrap())
-            });
-            let evar = if elaborations.len() > 0 {
-                elaborations
-                    .iter()
-                    .filter(|x| x.contains("global."))
-                    .next()
-                    .unwrap()
-                    .clone()
-            } else {
-                "tmp".to_string()
-            };
-            let var_id = egraph.add(Mio::Symbol(evar));
-            let operands = self.operands.iter().map(|v| subst[*v]).collect::<Vec<_>>();
-            // TODO: Notice that we are not enforcing depth limit to the operands.
-            // We will need to limit it because it cannot have unbounded depth
-            // e.g. Intel Tofino can only do depth 2
-            let stateful_alu = egraph.add(Mio::SAlu(
-                vec![ops_id, var_id]
-                    .into_iter()
-                    .chain(operands.into_iter())
-                    .collect(),
-            ));
-            egraph.union(eclass, stateful_alu);
-            vec![eclass, stateful_alu]
-        } else {
-            let pattern = format!(
-                "({} {} {})",
-                self.alu_type,
-                self.alu_op,
-                self.operands
-                    .iter()
-                    .map(|x| x.to_string())
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            );
-            let pattern = pattern.parse::<Pattern<Mio>>().unwrap();
-            pattern.apply_one(egraph, eclass, subst, searcher_ast, rule_name)
-        }
+        let pattern = format!(
+            "({} {} {})",
+            self.alu_type,
+            self.alu_op,
+            self.operands
+                .iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        let pattern = pattern.parse::<Pattern<Mio>>().unwrap();
+        pattern.apply_one(egraph, eclass, subst, searcher_ast, rule_name)
     }
 }
 
@@ -338,11 +359,11 @@ pub fn lift_stateless() -> Vec<RW> {
                             // (?op ?x ?y) where ?x or ?y is a global variable
                             for op in ["+", "-"] {
                                 let pattern_l =
-                                    format!("(E ?t ({} (arith-alu alu-global ?x) ?y))", op)
+                                    format!("(E ?t ?v ({} (arith-alu alu-global ?x) ?y))", op)
                                         .parse::<Pattern<Mio>>()
                                         .unwrap();
                                 let pattern_r =
-                                    format!("(E ?t ({} ?y (arith-alu alu-global ?x)))", op)
+                                    format!("(E ?t ?v ({} ?y (arith-alu alu-global ?x)))", op)
                                         .parse::<Pattern<Mio>>()
                                         .unwrap();
                                 egraph.rebuild();
@@ -430,8 +451,9 @@ pub fn lift_stateless() -> Vec<RW> {
                     .map(|v| {
                         v.iter()
                             .map(|(expr_id, binding)| {
+                                let evar_id = egraph.add(Mio::Symbol(binding.clone()));
                                 let elaborate_id =
-                                    egraph.add(Mio::Elaborate([table_name_id, *expr_id]));
+                                    egraph.add(Mio::Elaborate([table_name_id, evar_id, *expr_id]));
                                 MioAnalysis::add_to_elaboration(
                                     egraph,
                                     elaborate_id,
@@ -457,7 +479,10 @@ pub fn lift_stateless() -> Vec<RW> {
                     .map(|v| {
                         v.into_iter()
                             .map(|(id, elaboration)| {
-                                let elaborate_id = egraph.add(Mio::Elaborate([table_name_id, id]));
+                                let evar_id = egraph
+                                    .add(Mio::Symbol(elaboration.iter().next().unwrap().clone()));
+                                let elaborate_id =
+                                    egraph.add(Mio::Elaborate([table_name_id, evar_id, id]));
                                 MioAnalysis::set_elaboration(egraph, elaborate_id, elaboration);
                                 return elaborate_id;
                             })
