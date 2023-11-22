@@ -223,10 +223,10 @@ pub mod stateful {
                     )
                 };
                 let pattern = format!(
-                    "(stateful-alu alu-ite {}
+                    "(E ?t ?v (stateful-alu alu-ite {}
                     (rel-alu {} {} {})
                     (+ {} {})
-                    (+ {} {}))",
+                    (+ {} {})))",
                     evar, self.op, self.r, self.rhs, self.z, self.x, self.w, self.y
                 );
                 return pattern.parse::<Pattern<Mio>>().unwrap().apply_one(
@@ -239,11 +239,11 @@ pub mod stateful {
             }
         }
         vec![rewrite!("domino-if-else-raw";
-                "(ite
+                "(E ?t ?v (ite
                     (rel-alu ?op ?r ?rhs)
                     (+ ?z ?x)
                     (+ ?w ?y)
-                )" => { IfElseApplier {
+                ))" => { IfElseApplier {
                     op: "?op".parse().unwrap(),
                     r: "?r".parse().unwrap(),
                     rhs: "?rhs".parse().unwrap(),
@@ -301,7 +301,7 @@ pub mod stateful {
                     )
                 };
                 let pattern = format!(
-                    "(stateful-alu alu-ite {}
+                    "(E ?t ?v (stateful-alu alu-ite {}
                         (rel-alu {} {} {})
                         (stateful-alu alu-ite tmp
                             (rel-alu {} {} {})
@@ -313,7 +313,7 @@ pub mod stateful {
                             (arith-alu alu-add {} {})
                             (arith-alu alu-add {} {})
                         )
-                )",
+                ))",
                     evar,
                     self.op1,
                     self.r,
@@ -343,7 +343,7 @@ pub mod stateful {
             }
         }
         vec![rewrite!("domino-stateful-nested-ifs";
-                "(ite
+                "(E ?t ?v (ite
                     (rel-alu ?op1 ?r ?rhs1)
                     (ite
                         (rel-alu ?op2 ?r1 ?rhs2)
@@ -355,7 +355,7 @@ pub mod stateful {
                         (arith-alu alu-add ?r5 ?z)
                         (arith-alu alu-add ?r6 ?w)
                     )
-                )" => { NestedIfsApplier {
+                ))" => { NestedIfsApplier {
                     op1: "?op1".parse().unwrap(),
                     op2: "?op2".parse().unwrap(),
                     op3: "?op3".parse().unwrap(),
@@ -416,21 +416,17 @@ pub mod stateful {
                 rule_name: egg::Symbol,
             ) -> Vec<Id> {
                 let elaborations = MioAnalysis::elaborations(egraph, eclass);
-                let g_reads = MioAnalysis::read_set(egraph, subst[self.g]);
-                // if elaborations != g_reads {
-                //     return vec![];
-                // }
                 let evar = if elaborations.len() == 0 {
                     "tmp".to_string()
                 } else {
                     elaborations.iter().next().unwrap().clone()
                 };
                 let pattern = format!(
-                    "(stateful-alu alu-ite (arith-alu alu-global {})
+                    "(E ?t ?v (stateful-alu alu-ite (arith-alu alu-global {})
                         (rel-alu {} {} {})
                         (arith-alu alu-add {} {})
                         (arith-alu alu-global {})
-                    )",
+                    ))",
                     evar, self.op, self.r, self.rhs, self.r1, self.x, self.g
                 );
                 return pattern.parse::<Pattern<Mio>>().unwrap().apply_one(
@@ -444,11 +440,11 @@ pub mod stateful {
         }
         vec![
             rewrite!("domino-stateful-pred-raw";
-            "(ite
+            "(E ?t ?v (ite
                     (rel-alu ?op ?r ?rhs)
                     (arith-alu alu-add ?r1 ?x)
                     (arith-alu alu-global ?g)
-                )" => { PredRawApplier {
+                ))" => { PredRawApplier {
                 op: "?op".parse().unwrap(),
                 r: "?r".parse().unwrap(),
                 rhs: "?rhs".parse().unwrap(),
@@ -506,11 +502,11 @@ mod test {
         let rewrites = seq_elim()
             .into_iter()
             .chain(super::stateless::arith_to_alu())
-            .chain(multi_stage_action(1, 1))
+            // .chain(multi_stage_action(1, 1))
             .chain(if_else_raw())
             .chain(pred_raw())
             .chain(bool_alu_rewrites())
-            .chain(lift_stateless())
+            // .chain(lift_stateless())
             // .chain(parallelize_independent_tables())
             .chain(nested_ifs())
             .chain(rel_comp_rewrites())
