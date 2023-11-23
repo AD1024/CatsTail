@@ -231,7 +231,7 @@ impl Applier<Mio, MioAnalysis> for ElaboratorConversion {
         searcher_ast: Option<&egg::PatternAst<Mio>>,
         rule_name: egg::Symbol,
     ) -> Vec<Id> {
-        let table_id = subst[self.table_id];
+        // let table_id = subst[self.table_id];
         let expr_id = subst[self.expr];
         let elaborations = MioAnalysis::elaborations(egraph, eclass).clone();
         let (op, args) = MioAnalysis::decompose_alu_ops(egraph, expr_id).unwrap();
@@ -250,10 +250,10 @@ impl Applier<Mio, MioAnalysis> for ElaboratorConversion {
                     .chain(args.into_iter())
                     .collect(),
             ));
-            let elaborator_id = egraph.add(Mio::Elaborate([table_id, output_var_id, alu_id]));
-            MioAnalysis::set_elaboration(egraph, elaborator_id, elaborations);
-            egraph.union(eclass, elaborator_id);
-            return vec![eclass, elaborator_id];
+            // let elaborator_id = egraph.add(Mio::Elaborate([table_id, output_var_id, alu_id]));
+            // MioAnalysis::set_elaboration(egraph, elaborator_id, elaborations);
+            egraph.union(expr_id, alu_id);
+            return vec![];
         }
         return vec![];
     }

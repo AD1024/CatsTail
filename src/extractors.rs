@@ -10,6 +10,7 @@ pub struct GreedyExtractor<'a> {
     pub stateful_update_limit: usize,
     pub stateless_update_limit: usize,
     pub effect_disjoint: bool,
+    whitelist: HashSet<Mio>,
 }
 
 impl<'a> GreedyExtractor<'a> {
@@ -19,6 +20,7 @@ impl<'a> GreedyExtractor<'a> {
             stateful_update_limit: usize::MAX,
             stateless_update_limit: usize::MAX,
             effect_disjoint: false,
+            whitelist: HashSet::new(),
         }
     }
 }
@@ -34,9 +36,37 @@ impl<'a> CostFunction<Mio> for GreedyExtractor<'a> {
         // increasing the depth of the tree.
         let base: usize = match enode {
             Mio::Join(_) => 0,
-            Mio::ArithAlu(_) => 1,
-            Mio::RelAlu(_) => 1,
-            Mio::SAlu(_) => 1,
+            Mio::ArithAlu(chs) | Mio::RelAlu(chs) => {
+                if self.whitelist.contains(enode) {
+                    for ch in chs.iter() {
+                        for node in self.egraph[*ch].nodes.iter() {
+                            match node {
+                                Mio::ArithAlu(_) | Mio::RelAlu(_) => {
+                                    self.whitelist.insert(node.clone());
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    self.whitelist.remove(enode);
+                    0
+                } else {
+                    usize::MAX
+                }
+            }
+            Mio::SAlu(chs) => {
+                for ch in chs.iter() {
+                    for node in self.egraph[*ch].nodes.iter() {
+                        match node {
+                            Mio::ArithAlu(_) | Mio::RelAlu(_) => {
+                                self.whitelist.insert(node.clone());
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                1
+            }
             Mio::ArithAluOps(_) | Mio::RelAluOps(_) => 0,
             // Mio::Ite(_) => 1,
             Mio::GIte(_) => 1,
@@ -69,18 +99,29 @@ impl<'a> CostFunction<Mio> for GreedyExtractor<'a> {
             }
             Mio::Elaborate([_, v, e]) => {
                 if MioAnalysis::has_stateful_reads(self.egraph, *v) {
-                    if self.egraph[*e].nodes.iter().any(|n| {
-                        if let Mio::SAlu(_) = n {
-                            true
-                        } else {
-                            false
+                    let mut is_mapped = false;
+                    for node in self.egraph[*e].nodes.iter() {
+                        match node {
+                            Mio::SAlu(_) => {
+                                is_mapped = true;
+                            }
+                            _ => {}
                         }
-                    }) {
+                    }
+                    if is_mapped {
                         0
                     } else {
                         usize::MAX
                     }
                 } else {
+                    for node in self.egraph[*e].nodes.iter() {
+                        match node {
+                            Mio::ArithAlu(_) | Mio::RelAlu(_) => {
+                                self.whitelist.insert(node.clone());
+                            }
+                            _ => {}
+                        }
+                    }
                     0
                 }
             }
