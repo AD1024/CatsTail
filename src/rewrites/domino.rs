@@ -538,8 +538,8 @@ mod test {
             domino::stateful::{
                 bool_alu_rewrites, if_else_raw, nested_ifs, pred_raw, stateful_ite_simpl,
             },
-            lift_stateless,
-            table_transformations::{parallelize_independent_tables, seq_elim},
+            elaborator_conversion, lift_stateless,
+            table_transformations::{lift_ite_cond, parallelize_independent_tables, seq_elim},
         },
     };
 
@@ -549,14 +549,16 @@ mod test {
         let rewrites = seq_elim()
             .into_iter()
             .chain(super::stateless::arith_to_alu())
-            .chain(if_else_raw())
+            .chain(elaborator_conversion())
+            // .chain(if_else_raw())
             .chain(pred_raw())
-            .chain(bool_alu_rewrites())
-            .chain(nested_ifs())
+            // .chain(bool_alu_rewrites())
+            // .chain(nested_ifs())
             .chain(rel_comp_rewrites())
             .chain(alg_simpl())
+            .chain(lift_ite_cond())
             .chain(predicate_rewrites())
-            .chain(stateful_ite_simpl())
+            // .chain(stateful_ite_simpl())
             .collect::<Vec<_>>();
         let runner = Runner::default()
             .with_egraph(egraph)

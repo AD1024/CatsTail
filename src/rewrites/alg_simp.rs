@@ -9,6 +9,12 @@ use super::RW;
 
 pub fn is_integer(v: Var) -> impl Fn(&mut EGraph<Mio, MioAnalysis>, Id, &Subst) -> bool {
     move |egraph, _, subst| {
+        match &egraph[subst[v]].nodes[0] {
+            Mio::Elaborate(_) => {
+                return false;
+            }
+            _ => (),
+        }
         let vid = subst[v];
         match &egraph[vid].data {
             MioAnalysisData::Action(u) => match u.checked_type {
@@ -74,5 +80,6 @@ pub fn rel_comp_rewrites() -> Vec<RW> {
         rewrite!("lt-gt"; "(< ?x ?y)" => "(> ?y ?x)"),
         rewrite!("lt-comp-lt-0"; "(< ?x ?y)" => "(< (- ?x ?y) 0)"),
         rewrite!("gt-comp-gt-0"; "(> ?x ?y)" => "(< 0 (- ?x ?y))"),
+        rewrite!("lt-comp-sub"; "(< (- ?x ?y) ?z)" => "(> ?y (- ?x ?z))"),
     ]
 }

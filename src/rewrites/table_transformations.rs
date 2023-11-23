@@ -268,6 +268,7 @@ pub fn lift_ite_cond() -> Vec<RW> {
                         for node in egraph[comp_id].nodes.clone() {
                             match node {
                                 Mio::Ite([c, ib, rb]) => {
+                                    fixed.insert(*elab);
                                     if expr_map.contains_key(&c) {
                                         let new_ite = egraph.add(Mio::Ite([
                                             *expr_map.get(&c).unwrap(),
@@ -279,8 +280,11 @@ pub fn lift_ite_cond() -> Vec<RW> {
                                         subremain.push((evar.clone(), comp_id));
                                     }
                                 }
-                                _ => subremain.push((evar.clone(), comp_id)),
+                                _ => (),
                             }
+                        }
+                        if !fixed.contains(elab) {
+                            subremain.push((evar.clone(), comp_id));
                         }
                     }
                 }

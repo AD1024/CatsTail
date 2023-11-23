@@ -196,42 +196,42 @@ mod test {
     #[test]
     fn test_tofino_rcp() {
         let test_fn = || test_tofino_mapping(example_progs::rcp(), "rcp.pdf");
-        let avg_time = run_n_times(1, test_fn);
+        let avg_time = run_n_times(10, test_fn);
         println!("RCP avg time: {:?}", avg_time);
     }
 
     #[test]
     fn test_tofino_sampling() {
         let test_fn = || test_tofino_mapping(example_progs::sampling(), "sampling.pdf");
-        let avg_time = run_n_times(1, test_fn);
+        let avg_time = run_n_times(10, test_fn);
         println!("sampling avg time: {:?}", avg_time);
     }
 
     #[test]
     fn test_tofino_blue_increase() {
         let test_fn = || test_tofino_mapping(example_progs::blue_increase(), "blue_increase.pdf");
-        let avg_time = run_n_times(1, test_fn);
+        let avg_time = run_n_times(10, test_fn);
         println!("blue increase avg time: {:?}", avg_time);
     }
 
     #[test]
     fn test_tofino_flowlet() {
         let test_fn = || test_tofino_mapping(example_progs::flowlet(), "flowlet.pdf");
-        let avg_time = run_n_times(1, test_fn);
+        let avg_time = run_n_times(10, test_fn);
         println!("flowlet avg time: {:?}", avg_time);
     }
 
     #[test]
     fn test_tofino_marple_nmo() {
         let test_fn = || test_tofino_mapping(example_progs::marple_nmo(), "marple_nmo.pdf");
-        let avg_time = run_n_times(1, test_fn);
+        let avg_time = run_n_times(10, test_fn);
         println!("marple nmo avg time: {:?}", avg_time);
     }
 
     #[test]
     fn test_tofino_marple_new() {
         let test_fn = || test_tofino_mapping(example_progs::marple_new_flow(), "marple_new.pdf");
-        let avg_time = run_n_times(1, test_fn);
+        let avg_time = run_n_times(10, test_fn);
         println!("marple new avg time: {:?}", avg_time);
     }
 
