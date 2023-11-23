@@ -181,6 +181,7 @@ mod test {
         let end_time = std::time::Instant::now();
         println!("best cost: {}", best_cost);
         println!("best: {}", best.pretty(80));
+        println!("mappable: {}", best_cost != usize::MAX);
         println!("time: {:?}", end_time - start_time);
         end_time - start_time
     }

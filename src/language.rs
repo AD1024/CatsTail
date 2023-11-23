@@ -698,9 +698,19 @@ pub mod ir {
             Err(())
         }
 
+        pub fn get_operator_repr(expr: &Mio) -> String {
+            expr.to_string()
+                .split(' ')
+                .next()
+                .unwrap()
+                .replace("(", "")
+                .replace(")", "")
+                .to_string()
+        }
+
         pub fn add_expr(
             egraph: &mut egg::EGraph<Mio, MioAnalysis>,
-            op: &'static str,
+            op: &str,
             operands: Vec<Id>,
         ) -> Id {
             match op {
