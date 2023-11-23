@@ -477,6 +477,51 @@ pub mod stateful {
             if constains_leaf("?x".parse().unwrap())),
         ]
     }
+
+    pub fn stateful_ite_simpl() -> Vec<RW> {
+        struct SAluIteSimplApplier {
+            comp: Var,
+        }
+        impl Applier<Mio, MioAnalysis> for SAluIteSimplApplier {
+            fn apply_one(
+                &self,
+                egraph: &mut EGraph<Mio, MioAnalysis>,
+                eclass: Id,
+                subst: &Subst,
+                searcher_ast: Option<&egg::PatternAst<Mio>>,
+                rule_name: egg::Symbol,
+            ) -> Vec<Id> {
+                let comp_id = subst[self.comp];
+                if let Ok((op_name, args)) = MioAnalysis::decompose_alu_ops(egraph, comp_id) {
+                    let pattern = format!(
+                        "(stateful-alu {} ?v {})",
+                        op_name,
+                        args.into_iter()
+                            .map(|x| x.to_string())
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    );
+                    return pattern.parse::<Pattern<Mio>>().unwrap().apply_one(
+                        egraph,
+                        eclass,
+                        subst,
+                        searcher_ast,
+                        rule_name,
+                    );
+                } else {
+                    vec![]
+                }
+            }
+        }
+        vec![
+            rewrite!("stateful-ite-simpl"; "(stateful-alu alu-ite ?v true ?t1 ?t2)"
+            => {
+                SAluIteSimplApplier {
+                    comp: "?t1".parse().unwrap()
+                }
+            }),
+        ]
+    }
 }
 
 mod test {
@@ -490,9 +535,9 @@ mod test {
         p4::p4ir::Table,
         rewrites::{
             alg_simp::{alg_simpl, predicate_rewrites, rel_comp_rewrites},
-            domino::stateful::{bool_alu_rewrites, if_else_raw, nested_ifs, pred_raw},
+            domino::stateful::{bool_alu_rewrites, if_else_raw, nested_ifs, pred_raw, stateful_ite_simpl},
             lift_stateless,
-            table_transformations::{multi_stage_action, parallelize_independent_tables, seq_elim},
+            table_transformations::{parallelize_independent_tables, seq_elim},
         },
     };
 
@@ -502,16 +547,14 @@ mod test {
         let rewrites = seq_elim()
             .into_iter()
             .chain(super::stateless::arith_to_alu())
-            // .chain(multi_stage_action(1, 1))
             .chain(if_else_raw())
             .chain(pred_raw())
             .chain(bool_alu_rewrites())
-            // .chain(lift_stateless())
-            // .chain(parallelize_independent_tables())
             .chain(nested_ifs())
             .chain(rel_comp_rewrites())
             .chain(alg_simpl())
             .chain(predicate_rewrites())
+            .chain(stateful_ite_simpl())
             .collect::<Vec<_>>();
         let runner = Runner::default()
             .with_egraph(egraph)
@@ -519,7 +562,7 @@ mod test {
             .with_time_limit(Duration::from_secs(10));
         let runner = runner.run(rewrites.iter());
         // runner.egraph.dot().to_pdf(filename).unwrap();
-        let greedy_ext = GreedyExtractor::new(&runner.egraph);
+        let greedy_ext = GreedyExtractor::new(&runner.egraph, 1);
         let extractor = Extractor::new(&runner.egraph, greedy_ext);
         let (best_cost, best) = extractor.find_best(root);
         let end_time = std::time::Instant::now();

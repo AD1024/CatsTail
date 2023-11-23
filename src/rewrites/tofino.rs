@@ -151,7 +151,7 @@ mod test {
         rewrites::{
             domino::stateless::arith_to_alu,
             elaborator_conversion, lift_stateless,
-            table_transformations::{multi_stage_action, seq_elim, waw_elim},
+            table_transformations::{seq_elim, waw_elim},
             tofino::{stateful::conditional_assignments, stateless::cmp_to_rel},
         },
     };
@@ -174,7 +174,7 @@ mod test {
             .with_time_limit(Duration::from_secs(10));
         let runner = runner.run(rewrites.iter());
         // runner.egraph.dot().to_pdf(filename).unwrap();
-        let greedy_ext = GreedyExtractor::new(&runner.egraph);
+        let greedy_ext = GreedyExtractor::new(&runner.egraph, 2);
         let extractor = Extractor::new(&runner.egraph, greedy_ext);
         let (best_cost, best) = extractor.find_best(root);
         let end_time = std::time::Instant::now();

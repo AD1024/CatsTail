@@ -139,147 +139,37 @@ pub fn comm_independent_tables() -> Vec<RW> {
     ];
 }
 
-/// Span actions across stages
-/// `update_limit` is the maxium number of global updates allowed in a stage for an action
-/// Also need to guarantee that actions kept in the table do not modify the keys
-pub fn multi_stage_action(global_update_limit: usize, phv_update_limit: usize) -> Vec<RW> {
-    struct MultiStagedApplier(Var, Var, usize, usize);
-    impl Applier<Mio, MioAnalysis> for MultiStagedApplier {
+pub fn ite_to_gite() -> Vec<RW> {
+    struct IteToGIteApplier {
+        keys: &'static str,
+        actions: &'static str,
+    }
+    impl Applier<Mio, MioAnalysis> for IteToGIteApplier {
         fn apply_one(
             &self,
             egraph: &mut EGraph<Mio, MioAnalysis>,
             eclass: Id,
             subst: &Subst,
-            _searcher_ast: Option<&egg::PatternAst<Mio>>,
-            _rule_name: egg::Symbol,
+            searcher_ast: Option<&egg::PatternAst<Mio>>,
+            rule_name: egg::Symbol,
         ) -> Vec<Id> {
-            let kid = subst[self.0];
-            let aid = subst[self.1];
-            let global_update_limit = self.2;
-            let local_update_limit = self.3;
-            let keys_read = MioAnalysis::read_set(egraph, kid);
-            // stores a vector of elaborations (Vec<Id>)
-            let mut remained_updates = vec![];
-            let mut splitted_updates = vec![];
-            for elabs in egraph[aid].nodes[0].children() {
-                let mut remained = vec![];
-                let mut split = vec![];
-                let mut num_global_writes = HashSet::new();
-                let mut num_phv_writes = HashSet::new();
-                let mut fixed = HashSet::new();
-                for elaboration in egraph[*elabs].nodes[0].children() {
-                    // each elaboration
-                    if fixed.contains(elaboration) {
-                        continue;
-                    }
-                    if MioAnalysis::elaborations(egraph, *elaboration).is_disjoint(keys_read) {
-                        match &egraph[*elaboration].data {
-                            MioAnalysisData::Action(u) => {
-                                if u.elaborations.iter().any(|x| x.contains("global.")) {
-                                    if num_global_writes.len() == global_update_limit {
-                                        split.push(*elaboration);
-                                        for others in egraph[*elabs].nodes[0].children() {
-                                            if others != elaboration
-                                                && !split.contains(others)
-                                                && MioAnalysis::read_set(egraph, *others)
-                                                    .intersection(&u.elaborations)
-                                                    .count()
-                                                    > 0
-                                            {
-                                                if fixed.contains(others) {
-                                                    num_global_writes.retain(|x| {
-                                                        !MioAnalysis::elaborations(egraph, *others)
-                                                            .contains(*x)
-                                                    });
-                                                    num_phv_writes.retain(|x| {
-                                                        !MioAnalysis::elaborations(egraph, *others)
-                                                            .contains(*x)
-                                                    });
-                                                }
-                                                remained.retain(|x| x != others);
-                                                fixed.insert(others);
-                                                split.push(*others);
-                                            }
-                                        }
-                                    } else {
-                                        num_global_writes.extend(u.elaborations.iter());
-                                        remained.push(*elaboration);
-                                    }
-                                } else {
-                                    if num_phv_writes.len() == local_update_limit {
-                                        split.push(*elaboration);
-                                        for others in egraph[*elabs].nodes[0].children() {
-                                            if others != elaboration
-                                                && !split.contains(others)
-                                                && MioAnalysis::read_set(egraph, *others)
-                                                    .intersection(&u.elaborations)
-                                                    .count()
-                                                    > 0
-                                                && MioAnalysis::has_stateful_elaboration(
-                                                    egraph, *others,
-                                                )
-                                            {
-                                                if fixed.contains(others) {
-                                                    num_global_writes.retain(|x| {
-                                                        !MioAnalysis::elaborations(egraph, *others)
-                                                            .contains(*x)
-                                                    });
-                                                    num_phv_writes.retain(|x| {
-                                                        !MioAnalysis::elaborations(egraph, *others)
-                                                            .contains(*x)
-                                                    });
-                                                }
-                                                remained.retain(|x| x != others);
-                                                fixed.insert(others);
-                                                split.push(*others);
-                                            }
-                                        }
-                                    } else {
-                                        num_phv_writes.extend(u.elaborations.iter());
-                                        remained.push(*elaboration);
-                                    }
-                                }
-                            }
-                            _ => panic!("not an action"),
-                        }
-                    } else {
-                        fixed.insert(elaboration);
-                        split.push(*elaboration);
-                    }
-                }
-                if remained.len() == 0 || split.len() == 0 {
-                    continue;
-                }
-                assert!(remained.len() + split.len() == egraph[*elabs].nodes[0].children().len());
-                remained_updates.push(remained);
-                splitted_updates.push(split);
+            let kid = subst[self.keys.parse().unwrap()];
+            let aid = subst[self.actions.parse().unwrap()];
+            let elaborations = MioAnalysis::aggregate_elaborators(egraph, aid);
+            let pattern = "(ite ?c ?b1 ?b2)".parse::<Pattern<Mio>>().unwrap();
+            // let mut remain = vec![];
+            // let mut split = vec![];
+            for elaborators in elaborations {
+                // check statueful updates:
+                // only allow
             }
-            if remained_updates.len() == 0 || splitted_updates.len() == 0 {
-                return vec![];
-            }
-            let lhs_table_elaborations = remained_updates
-                .into_iter()
-                .map(|v| egraph.add(Mio::Elaborations(v)))
-                .collect::<Vec<_>>();
-            let rhs_table_elaborations = splitted_updates
-                .into_iter()
-                .map(|v| egraph.add(Mio::Elaborations(v)))
-                .collect::<Vec<_>>();
-            let lhs_table_actions = egraph.add(Mio::Actions(lhs_table_elaborations));
-            let rhs_table_actions = egraph.add(Mio::Actions(rhs_table_elaborations));
-            let lhs_table = egraph.add(Mio::GIte([kid, lhs_table_actions]));
-            let rhs_table = egraph.add(Mio::GIte([kid, rhs_table_actions]));
-            let seq_id = egraph.add(Mio::Seq([lhs_table, rhs_table]));
-            egraph.union(eclass, seq_id);
-            vec![eclass, seq_id]
+            vec![]
         }
     }
-    return vec![rewrite!(
-            "multi-staged-action";
-            "(gite ?k ?a)" => 
-            { MultiStagedApplier("?k".parse().unwrap(), "?a".parse().unwrap(), global_update_limit, phv_update_limit) })];
-}
-
-pub fn ite_to_gite() -> Vec<RW> {
-    vec![rewrite!("ite-to-gite"; "(ite ?c ?t1 ?t2)" => "(gite (keys ?c1) (actions ?t1 ?t2))")]
+    vec![rewrite!("ite-to-gite"; "(gite ?k ?a)" => {
+        IteToGIteApplier {
+            keys: "?k",
+            actions: "?a",
+        }
+    })]
 }

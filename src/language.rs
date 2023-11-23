@@ -752,6 +752,15 @@ pub mod ir {
             }
         }
 
+        pub fn get_symbol(egraph: &egg::EGraph<Mio, MioAnalysis>, id: Id) -> String {
+            for node in &egraph[id].nodes {
+                if let Mio::Symbol(sym) = node {
+                    return sym.clone();
+                }
+            }
+            panic!("No symbol in {:?}", egraph[id].nodes);
+        }
+
         pub fn build_table(
             egraph: &mut egg::EGraph<Mio, MioAnalysis>,
             table_name: String,
