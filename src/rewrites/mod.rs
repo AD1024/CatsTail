@@ -395,9 +395,10 @@ pub fn lift_stateless() -> Vec<RW> {
                                         continue;
                                     }
                                     let to_lift = new_subst[pattern_var];
-                                    let binding = egraph
-                                        .analysis
-                                        .new_var(MioAnalysis::get_type(egraph, to_lift));
+                                    let binding = egraph.analysis.new_var(
+                                        MioAnalysis::get_type(egraph, to_lift),
+                                        to_lift.to_string(),
+                                    );
                                     // remaining computation should be (op ?x ?binding) / (op ?binding ?x)
                                     let alu_global_id =
                                         egraph.add(Mio::ArithAluOps("alu-global".parse().unwrap()));

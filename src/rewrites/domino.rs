@@ -535,7 +535,9 @@ mod test {
         p4::p4ir::Table,
         rewrites::{
             alg_simp::{alg_simpl, predicate_rewrites, rel_comp_rewrites},
-            domino::stateful::{bool_alu_rewrites, if_else_raw, nested_ifs, pred_raw, stateful_ite_simpl},
+            domino::stateful::{
+                bool_alu_rewrites, if_else_raw, nested_ifs, pred_raw, stateful_ite_simpl,
+            },
             lift_stateless,
             table_transformations::{parallelize_independent_tables, seq_elim},
         },

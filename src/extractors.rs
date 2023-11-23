@@ -100,6 +100,13 @@ impl<'a> CostFunction<Mio> for GreedyExtractor<'a> {
                 c
             }
             Mio::Elaborate([_, v, e]) => {
+                if MioAnalysis::stateful_reads(self.egraph, *e)
+                    .union(&MioAnalysis::stateful_reads(self.egraph, *v))
+                    .count()
+                    > self.stateful_reg_per_alu
+                {
+                    return usize::MAX;
+                }
                 if MioAnalysis::has_stateful_reads(self.egraph, *v) {
                     let mut is_mapped = false;
                     for node in self.egraph[*e].nodes.iter() {
@@ -111,17 +118,7 @@ impl<'a> CostFunction<Mio> for GreedyExtractor<'a> {
                         }
                     }
                     if is_mapped {
-                        let gvar = MioAnalysis::get_symbol(self.egraph, *v);
-                        if MioAnalysis::read_set(self.egraph, *e)
-                            .iter()
-                            .filter(|&x| x != &gvar)
-                            .count()
-                            <= self.stateful_reg_per_alu
-                        {
-                            0
-                        } else {
-                            usize::MAX
-                        }
+                        0
                     } else {
                         usize::MAX
                     }

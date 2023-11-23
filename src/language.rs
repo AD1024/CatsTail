@@ -1,6 +1,7 @@
 use egg;
 
 pub mod ir {
+    use std::borrow::BorrowMut;
     use std::ops;
     use std::{
         collections::{HashMap, HashSet},
@@ -9,7 +10,9 @@ pub mod ir {
         str::FromStr,
     };
 
-    use egg::{define_language, Analysis, DidMerge, EGraph, Id, Language};
+    use egg::{
+        define_language, Analysis, AstSize, DidMerge, EGraph, Extractor, Id, Language, RecExpr,
+    };
 
     define_language! {
         pub enum Mio {
@@ -441,8 +444,11 @@ pub mod ir {
             }
         }
 
-        pub fn new_var(&mut self, ty: MioType) -> String {
-            let result = format!("var_{}", self.var_counter);
+        pub fn new_var(&mut self, ty: MioType, suffix: String) -> String {
+            let result = format!("var_{}", suffix);
+            if self.gamma.contains_key(&result) {
+                return result;
+            }
             self.gamma.insert(result.clone(), ty);
             self.var_counter += 1;
             return result;
@@ -630,6 +636,12 @@ pub mod ir {
             }
         }
 
+        pub fn get_single_elaboration(egraph: &egg::EGraph<Mio, Self>, id: Id) -> String {
+            let elaborations = Self::elaborations(egraph, id);
+            assert_eq!(elaborations.len(), 1);
+            elaborations.iter().next().unwrap().clone()
+        }
+
         pub fn add_to_elaboration(
             egraph: &mut egg::EGraph<Mio, Self>,
             id: Id,
@@ -733,6 +745,27 @@ pub mod ir {
             return Self::elaborations(egraph, id)
                 .iter()
                 .any(|x| x.contains("global."));
+        }
+
+        pub fn stateful_reads(egraph: &egg::EGraph<Mio, MioAnalysis>, id: Id) -> HashSet<String> {
+            return Self::read_set(egraph, id)
+                .iter()
+                .filter(|x| x.contains("global."))
+                .cloned()
+                .collect();
+        }
+
+        pub fn stateful_read_count(egraph: &egg::EGraph<Mio, MioAnalysis>, id: Id) -> usize {
+            return Self::read_set(egraph, id)
+                .iter()
+                .filter(|x| x.contains("global."))
+                .count();
+        }
+
+        pub fn extract_smallest_expr(egraph: &egg::EGraph<Mio, Self>, id: Id) -> RecExpr<Mio> {
+            let cost_fn = AstSize;
+            let mut extractor = Extractor::new(egraph, cost_fn);
+            extractor.find_best(id).1
         }
 
         pub fn has_stateless_elaboration(egraph: &egg::EGraph<Mio, MioAnalysis>, id: Id) -> bool {
@@ -901,23 +934,31 @@ pub mod ir {
                 *a = b;
                 return DidMerge(true, false);
             }
-            if let (MioAnalysisData::Dataflow(lhs), MioAnalysisData::Dataflow(rhs)) = (&a, &b) {
+            if let (MioAnalysisData::Dataflow(lhs), MioAnalysisData::Dataflow(rhs)) =
+                (a.borrow_mut(), &b)
+            {
                 // assert_eq!(lhs.reads, rhs.reads);
-                assert_eq!(lhs.writes, rhs.writes);
+                // assert_eq!(lhs.writes, rhs.writes);
+                lhs.writes = lhs.writes.union(&rhs.writes).cloned().collect();
+                return DidMerge(true, true);
+            }
+            if let (MioAnalysisData::Action(_lhs), MioAnalysisData::Dataflow(_rhs)) =
+                (a.borrow_mut(), &b)
+            {
+                // assert_eq!(lhs.reads, rhs.reads);
+                // assert_eq!(lhs.writes, rhs.writes);
                 return DidMerge(false, false);
             }
-            if let (MioAnalysisData::Action(lhs), MioAnalysisData::Dataflow(rhs)) = (&a, &b) {
+            if let (MioAnalysisData::Dataflow(lhs), MioAnalysisData::Action(rhs)) =
+                (a.borrow_mut(), &b)
+            {
                 // assert_eq!(lhs.reads, rhs.reads);
-                assert_eq!(lhs.writes, rhs.writes);
-                return DidMerge(false, false);
+                // assert_eq!(lhs.writes, rhs.writes);
+                lhs.writes = lhs.writes.union(&rhs.writes).cloned().collect();
+                return DidMerge(false, true);
             }
-            if let (MioAnalysisData::Dataflow(lhs), MioAnalysisData::Action(rhs)) = (&a, &b) {
-                // assert_eq!(lhs.reads, rhs.reads);
-                assert_eq!(lhs.writes, rhs.writes);
-                *a = b;
-                return DidMerge(true, false);
-            }
-            if let (MioAnalysisData::Action(u1), MioAnalysisData::Action(u2)) = (&a, &b) {
+            if let (MioAnalysisData::Action(u1), MioAnalysisData::Action(u2)) = (a.borrow_mut(), &b)
+            {
                 let ty = Self::type_unification(&u1.checked_type, &u2.checked_type);
                 let merged = MioAnalysis::new_action_data(
                     u1.reads.union(&u2.reads).cloned().collect(),
