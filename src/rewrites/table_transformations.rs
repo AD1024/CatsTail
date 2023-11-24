@@ -196,7 +196,14 @@ pub fn lift_ite_cond() -> Vec<RW> {
                                     .collect::<HashSet<_>>();
                                 for compare_node in egraph[c].nodes.clone() {
                                     match compare_node {
-                                        Mio::Lt([lhs, rhs]) | Mio::Gt([lhs, rhs]) => {
+                                        Mio::Lt([lhs, rhs])
+                                        | Mio::Gt([lhs, rhs])
+                                        | Mio::Le([lhs, rhs])
+                                        | Mio::Ge([lhs, rhs])
+                                        | Mio::Eq([lhs, rhs])
+                                        | Mio::Neq([lhs, rhs])
+                                        | Mio::LAnd([lhs, rhs])
+                                        | Mio::LOr([lhs, rhs]) => {
                                             let (var_name, new_comp, compute_phv) =
                                                 // comsider ?c to be (?op lhs rhs)
                                                 // we can lift lhs or rhs to some new phv field
