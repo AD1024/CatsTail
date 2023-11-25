@@ -539,7 +539,9 @@ mod test {
                 bool_alu_rewrites, if_else_raw, nested_ifs, pred_raw, stateful_ite_simpl,
             },
             elaborator_conversion, lift_stateless,
-            table_transformations::{lift_ite_cond, parallelize_independent_tables, seq_elim},
+            table_transformations::{
+                lift_ite_compare, lift_ite_cond, parallelize_independent_tables, seq_elim,
+            },
         },
     };
 
@@ -556,6 +558,7 @@ mod test {
             // .chain(nested_ifs())
             .chain(rel_comp_rewrites())
             .chain(alg_simpl())
+            .chain(lift_ite_compare())
             .chain(lift_ite_cond())
             .chain(predicate_rewrites())
             // .chain(stateful_ite_simpl())

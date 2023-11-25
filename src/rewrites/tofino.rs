@@ -151,7 +151,7 @@ mod test {
         rewrites::{
             domino::stateless::arith_to_alu,
             elaborator_conversion, lift_stateless,
-            table_transformations::{lift_ite_cond, seq_elim, waw_elim},
+            table_transformations::{lift_ite_compare, seq_elim, waw_elim},
             tofino::{stateful::conditional_assignments, stateless::cmp_to_rel},
         },
     };
@@ -166,7 +166,7 @@ mod test {
             .chain(elaborator_conversion())
             .chain(cmp_to_rel())
             // .chain(lift_stateless())
-            .chain(lift_ite_cond())
+            .chain(lift_ite_compare())
             // .chain(waw_elim())
             .collect::<Vec<_>>();
         let runner = Runner::default()

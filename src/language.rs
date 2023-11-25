@@ -1243,8 +1243,8 @@ pub mod ir {
                 | Mio::Neq([a, b]) => {
                     let a_type = Self::get_type(egraph, *a);
                     let b_type = Self::get_type(egraph, *b);
-                    let ret_type = Self::type_unification(&a_type, &b_type);
-                    let _ = Self::type_unification(&ret_type, &MioType::Int);
+                    let _ = Self::type_unification(&a_type, &b_type);
+                    // let _ = Self::type_unification(&ret_type, &MioType::Int);
                     let reads = Self::read_set(egraph, *a)
                         .union(Self::read_set(egraph, *b))
                         .cloned()
