@@ -69,7 +69,7 @@ impl<'a> CostFunction<Mio> for GreedyExtractor<'a> {
                 }
                 1
             }
-            Mio::ArithAluOps(_) | Mio::RelAluOps(_) => 0,
+            Mio::ArithAluOps(_) | Mio::BoolAluOps(_) | Mio::RelAluOps(_) => 0,
             Mio::GIte(_) => 1,
             Mio::Actions(_) => 1,
             Mio::Elaborations(_) => 0,
@@ -115,7 +115,7 @@ impl<'a> CostFunction<Mio> for GreedyExtractor<'a> {
             Mio::Seq(_) => 1,
             Mio::Symbol(_) => 0,
             Mio::Constant(_) => 0,
-            _ => usize::MAX,
+            _ => 1000,
         };
         let child_cost = enode.fold(0, |max, id| max.max(costs(id)));
         base.saturating_add(child_cost)

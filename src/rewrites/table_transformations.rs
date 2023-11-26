@@ -415,19 +415,10 @@ pub fn lift_nested_ite_cond() -> Vec<RW> {
                     assert_eq!(MioAnalysis::elaborations(egraph, *elab).len(), 1);
                     let comp_id = MioAnalysis::unwrap_elaborator(egraph, *elab);
                     let evar = MioAnalysis::get_single_elaboration(egraph, *elab);
-                    if !MioAnalysis::has_stateful_elaboration(egraph, *elab)
-                        && MioAnalysis::stateful_read_count(egraph, *elab) <= 1
-                    {
-                        continue;
-                    }
-                    if MioAnalysis::elaborations(egraph, *elab)
-                        .union(&MioAnalysis::stateful_reads(egraph, *elab))
-                        .count()
-                        <= 1
-                    {
-                        continue;
-                    }
                     'outter_loop: for node in egraph[comp_id].nodes.clone() {
+                        if fixed.contains(elab) {
+                            continue;
+                        }
                         match node {
                             Mio::Ite([c, ib, rb]) => {
                                 for ib_node in egraph[ib].nodes.clone() {
@@ -448,7 +439,7 @@ pub fn lift_nested_ite_cond() -> Vec<RW> {
                                                 subremain.push((evar.clone(), new_ite));
                                                 fixed.insert(*elab);
                                                 expr_map.insert(ib_c, new_comp);
-                                                break 'outter_loop;
+                                                break;
                                             }
                                         }
                                         _ => {}
@@ -506,6 +497,7 @@ pub fn lift_nested_ite_cond() -> Vec<RW> {
                                     } else {
                                         subremain.push((evar.clone(), comp_id));
                                     }
+                                    break;
                                 }
                                 _ => (),
                             }
@@ -523,8 +515,6 @@ pub fn lift_nested_ite_cond() -> Vec<RW> {
                     split.push(subsplit);
                 }
             }
-            // println!("lift nested remain: {:?}", remain);
-            // println!("lift nested split: {:?}", split);
             if remain.len() == 0 || split.len() == 0 {
                 return vec![];
             }
@@ -587,6 +577,7 @@ pub fn lift_ite_cond() -> Vec<RW> {
             let mut split = vec![];
             let mut fixed = HashSet::new();
             let mut expr_map = HashMap::new();
+            let mut splitted = HashSet::new();
             let prev_table = egraph
                 .analysis
                 .new_table_name(MioAnalysis::get_table_name(egraph, eclass));
@@ -641,11 +632,16 @@ pub fn lift_ite_cond() -> Vec<RW> {
                                                     &MioAnalysis::get_operator_repr(&cond_node),
                                                     vec![x, y],
                                                 );
-                                                subsplit.push((new_phv_field, compute_phv));
-                                                split_reads.extend(MioAnalysis::stateful_reads(
-                                                    egraph,
-                                                    compute_phv,
-                                                ));
+                                                if !splitted.contains(&compute_phv) {
+                                                    subsplit.push((new_phv_field, compute_phv));
+                                                    split_reads.extend(
+                                                        MioAnalysis::stateful_reads(
+                                                            egraph,
+                                                            compute_phv,
+                                                        ),
+                                                    );
+                                                    splitted.insert(compute_phv);
+                                                }
                                                 assert!(!fixed.contains(&evar));
                                                 subremain.push((evar.clone(), new_ite));
                                                 fixed.insert(evar.clone());

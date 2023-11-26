@@ -46,11 +46,11 @@ pub mod stateless {
             //     "(ite ?c ?x ?y)" => { AluApplier::new("arith-alu", "alu-ite", vec!["?c", "?x", "?y"]) }
             //     if neq_0_check_match("?c".parse().unwrap())),
             rewrite!("domino-neq-0-or";
-                "(lor ?x ?y)" => { AluApplier::new("bool-alu", "alu-or", vec!["?x", "?y"]) }
+                "(lor ?x ?y)" => { AluApplier::new("rel-alu", "alu-or", vec!["?x", "?y"]) }
                 if neq_0_check_match("?x".parse().unwrap())
                 if neq_0_check_match("?y".parse().unwrap())),
             rewrite!("domino-neq-0-and";
-                "(land ?x ?y)" => { AluApplier::new("bool-alu", "alu-or", vec!["?x", "?y"]) }
+                "(land ?x ?y)" => { AluApplier::new("rel-alu", "alu-or", vec!["?x", "?y"]) }
                 if neq_0_check_match("?x".parse().unwrap())
                 if neq_0_check_match("?y".parse().unwrap())),
         ]
@@ -64,7 +64,7 @@ pub mod stateful {
 
     use crate::{
         language::ir::{Constant, Mio, MioAnalysis, MioType},
-        rewrites::{constains_leaf, same_read, RW},
+        rewrites::{constains_leaf, is_mapped, is_n_depth_mapped, same_read, RW},
     };
 
     fn check_relops(
@@ -111,30 +111,30 @@ pub mod stateful {
     pub fn bool_alu_rewrites() -> Vec<RW> {
         vec![
             rewrite!("domino-stateful-bool-alu-1";
-                "(lnot (lor ?x ?y))" => "(bool-alu alu-not (bool-alu alu-or ?x ?y))"
+                "(lnot (lor ?x ?y))" => "(rel-alu alu-not (rel-alu alu-or ?x ?y))"
                 if constains_leaf("?x".parse().unwrap())
                 if constains_leaf("?y".parse().unwrap())),
             rewrite!("domino-stateful-bool-alu-2";
-                "(land (lnot ?x) ?y)" => "(bool-alu alu-and (bool-alu alu-not ?x) ?y)"
+                "(land (lnot ?x) ?y)" => "(rel-alu alu-and (rel-alu alu-not ?x) ?y)"
                 if constains_leaf("?x".parse().unwrap())
                 if constains_leaf("?y".parse().unwrap())),
             rewrite!("domino-stateful-bool-alu-3";
-                "(lnot ?x)" => "(bool-alu alu-not ?x)"
+                "(lnot ?x)" => "(rel-alu alu-not ?x)"
                 if constains_leaf("?x".parse().unwrap())),
             rewrite!("domino-stateful-bool-alu-and";
-                "(land ?x ?y)" => "(bool-alu alu-and ?x ?y)"
+                "(land ?x ?y)" => "(rel-alu alu-and ?x ?y)"
                 if constains_leaf("?x".parse().unwrap())
                 if constains_leaf("?y".parse().unwrap())),
             rewrite!("domino-stateful-bool-alu-or";
-                "(lor ?x ?y)" => "(bool-alu alu-or ?x ?y)"
+                "(lor ?x ?y)" => "(rel-alu alu-or ?x ?y)"
                 if constains_leaf("?x".parse().unwrap())
                 if constains_leaf("?y".parse().unwrap())),
             rewrite!("domino-stateful-bool-alu-4";
-                "(lnot (land ?x ?y))" => "(bool-alu alu-not (bool-alu alu-and ?x ?y))"
+                "(lnot (land ?x ?y))" => "(rel-alu alu-not (rel-alu alu-and ?x ?y))"
                 if constains_leaf("?x".parse().unwrap())
                 if constains_leaf("?y".parse().unwrap())),
             rewrite!("domino-stateful-bool-alu-5";
-                "(lor (lnot ?x) ?y)" => "(bool-alu alu-or (bool-alu alu-not ?x) ?y)"
+                "(lor (lnot ?x) ?y)" => "(rel-alu alu-or (rel-alu alu-not ?x) ?y)"
                 if constains_leaf("?x".parse().unwrap())
                 if constains_leaf("?y".parse().unwrap())),
         ]
@@ -250,11 +250,11 @@ pub mod stateful {
                     w: "?w".parse().unwrap(),
                 } }
                 if check_relops("?op".parse().unwrap(), vec!["alu-eq", "alu-neq", "alu-gt", "alu-lt"])
-                if global_or_0("?r".parse().unwrap())
-                if global_or_0("?z".parse().unwrap())
-                if global_or_0("?w".parse().unwrap())
-                if same_if_is_var("?r".parse().unwrap(), "?z".parse().unwrap())
-                if same_if_is_var("?r".parse().unwrap(), "?w".parse().unwrap())
+                // if global_or_0("?r".parse().unwrap())
+                // if global_or_0("?z".parse().unwrap())
+                // if global_or_0("?w".parse().unwrap())
+                // if same_if_is_var("?r".parse().unwrap(), "?z".parse().unwrap())
+                // if same_if_is_var("?r".parse().unwrap(), "?w".parse().unwrap())
                 if constains_leaf("?rhs".parse().unwrap())
                 if constains_leaf("?x".parse().unwrap())
                 if constains_leaf("?y".parse().unwrap()))]
@@ -262,23 +262,7 @@ pub mod stateful {
 
     pub fn nested_ifs() -> Vec<RW> {
         // https://github.com/CaT-mindepth/minDepthCompiler/blob/weighted-grammar-parallel-final/src/grammars/stateful_domino/nested_ifs.sk
-        struct NestedIfsApplier {
-            op1: Var,
-            op2: Var,
-            op3: Var,
-            r: Var,
-            rhs1: Var,
-            rhs2: Var,
-            rhs3: Var,
-            r1: Var,
-            r2: Var,
-            r3: Var,
-            r4: Var,
-            x: Var,
-            y: Var,
-            z: Var,
-            w: Var,
-        }
+        struct NestedIfsApplier;
         impl Applier<Mio, MioAnalysis> for NestedIfsApplier {
             fn apply_one(
                 &self,
@@ -288,47 +272,65 @@ pub mod stateful {
                 searcher_ast: Option<&egg::PatternAst<Mio>>,
                 rule_name: egg::Symbol,
             ) -> Vec<Id> {
+                // check conditions
+                let stateless_read_violation =
+                    |v: Id| MioAnalysis::stateless_read_count(egraph, v) > 1;
+                let c1 = subst["?c1".parse().unwrap()];
+                let c2 = subst["?c2".parse().unwrap()];
+                let c3 = subst["?c3".parse().unwrap()];
+                if MioAnalysis::stateful_read_count(egraph, c1)
+                    + MioAnalysis::stateful_read_count(egraph, c2)
+                    + MioAnalysis::stateful_read_count(egraph, c3)
+                    > 1
+                {
+                    return vec![];
+                }
+                let b1 = subst["?b1".parse().unwrap()];
+                let b2 = subst["?b2".parse().unwrap()];
+                let b3 = subst["?b3".parse().unwrap()];
+                let b4 = subst["?b4".parse().unwrap()];
+                if MioAnalysis::stateful_read_count(egraph, b1)
+                    + MioAnalysis::stateful_read_count(egraph, b2)
+                    + MioAnalysis::stateful_read_count(egraph, b3)
+                    + MioAnalysis::stateful_read_count(egraph, b4)
+                    > 1
+                {
+                    return vec![];
+                }
+                if [b1, b2, b3, b4, c1, c2, c3]
+                    .into_iter()
+                    .any(stateless_read_violation)
+                {
+                    return vec![];
+                }
                 let elaborations = MioAnalysis::elaborations(egraph, eclass);
                 let evar = if elaborations.len() == 0 {
                     "tmp".to_string()
                 } else {
-                    format!(
-                        "(arith-alu alu-global {})",
-                        elaborations.iter().next().unwrap().clone()
-                    )
+                    if MioAnalysis::has_stateful_elaboration(egraph, eclass) {
+                        format!(
+                            "(arith-alu alu-global {})",
+                            elaborations.iter().next().unwrap().clone()
+                        )
+                    } else {
+                        format!("{}", elaborations.iter().next().unwrap().clone())
+                    }
                 };
                 let pattern = format!(
                     "(E ?t ?v (stateful-alu alu-ite {}
-                        (rel-alu {} {} {})
+                        ?c1
                         (stateful-alu alu-ite tmp
-                            (rel-alu {} {} {})
-                            (arith-alu alu-add {} {})
-                            (arith-alu alu-add {} {})
+                            ?c2
+                            ?b1
+                            ?b2
                         )
                         (stateful-alu alu-ite tmp
-                            (rel-alu {} {} {})
-                            (arith-alu alu-add {} {})
-                            (arith-alu alu-add {} {})
+                            ?c3
+                            ?b3
+                            ?b4
                         )
                 ))",
                     evar,
-                    self.op1,
-                    self.r,
-                    self.rhs1,
-                    self.op2,
-                    self.r,
-                    self.rhs2,
-                    self.r1,
-                    self.x,
-                    self.r2,
-                    self.y,
-                    self.op3,
-                    self.r,
-                    self.rhs3,
-                    self.r3,
-                    self.z,
-                    self.r4,
-                    self.w
                 );
                 return pattern.parse::<Pattern<Mio>>().unwrap().apply_one(
                     egraph,
@@ -341,56 +343,25 @@ pub mod stateful {
         }
         vec![rewrite!("domino-stateful-nested-ifs";
                 "(E ?t ?v (ite
-                    (rel-alu ?op1 ?r ?rhs1)
+                    ?c1
                     (ite
-                        (rel-alu ?op2 ?r1 ?rhs2)
-                        (+ ?r2 ?x)
-                        (+ ?r3 ?y)
+                        ?c2
+                        ?b1
+                        ?b2
                     )
                     (ite
-                        (rel-alu ?op3 ?r4 ?rhs3)
-                        (+ ?r5 ?z)
-                        (+ ?r6 ?w)
+                        ?c3
+                        ?b3
+                        ?b4
                     )
-                ))" => { NestedIfsApplier {
-                    op1: "?op1".parse().unwrap(),
-                    op2: "?op2".parse().unwrap(),
-                    op3: "?op3".parse().unwrap(),
-                    r: "?r".parse().unwrap(),
-                    rhs1: "?rhs1".parse().unwrap(),
-                    rhs2: "?rhs2".parse().unwrap(),
-                    rhs3: "?rhs3".parse().unwrap(),
-                    r1: "?r1".parse().unwrap(),
-                    r2: "?r2".parse().unwrap(),
-                    r3: "?r3".parse().unwrap(),
-                    r4: "?r4".parse().unwrap(),
-                    x: "?x".parse().unwrap(),
-                    y: "?y".parse().unwrap(),
-                    z: "?z".parse().unwrap(),
-                    w: "?w".parse().unwrap(),
-                } }
-            // if check_relops("?op1".parse().unwrap(), vec!["alu-eq", "alu-neq", "alu-gt", "alu-lt"])
-            // if check_relops("?op2".parse().unwrap(), vec!["alu-eq", "alu-neq", "alu-gt", "alu-lt"])
-            // if check_relops("?op3".parse().unwrap(), vec!["alu-eq", "alu-neq", "alu-gt", "alu-lt"])
-            // if global_or_0("?r".parse().unwrap())
-            // if global_or_0("?r1".parse().unwrap())
-            // if global_or_0("?r2".parse().unwrap())
-            // if global_or_0("?r3".parse().unwrap())
-            // if global_or_0("?r4".parse().unwrap())
-            // if same_if_is_var("?r".parse().unwrap(), "?r1".parse().unwrap())
-            // if same_if_is_var("?r".parse().unwrap(), "?r2".parse().unwrap())
-            // if same_if_is_var("?r".parse().unwrap(), "?r3".parse().unwrap())
-            // if same_if_is_var("?r".parse().unwrap(), "?r4".parse().unwrap())
-            // if check_arith_alu("?rhs1".parse().unwrap())
-            // if check_arith_alu("?rhs2".parse().unwrap())
-            // if check_arith_alu("?rhs3".parse().unwrap())
-            // if check_arith_alu("?x".parse().unwrap())
-            // if check_arith_alu("?y".parse().unwrap())
-            // if check_arith_alu("?z".parse().unwrap())
-            // if check_arith_alu("?w".parse().unwrap())
-            // at most two PHV fields to be read in compute
-            // at most 0 stateful read
-            // if check_read_limit(vec!["?x", "?y", "?z", "?w", "?rhs1", "?rhs2", "?rhs3"], 2, 0)
+                ))" => { NestedIfsApplier {} }
+            if is_n_depth_mapped("?b1".parse().unwrap(), 1, None)
+            if is_n_depth_mapped("?b2".parse().unwrap(), 1, None)
+            if is_n_depth_mapped("?b3".parse().unwrap(), 1, None)
+            if is_n_depth_mapped("?b4".parse().unwrap(), 1, None)
+            if is_n_depth_mapped("?c1".parse().unwrap(), 1, None)
+            if is_n_depth_mapped("?c2".parse().unwrap(), 1, None)
+            if is_n_depth_mapped("?c3".parse().unwrap(), 1, None)
         )]
     }
 
@@ -530,11 +501,14 @@ pub mod stateful {
 mod test {
     use std::time::Duration;
 
-    use egg::{Extractor, Pattern, Runner, Searcher};
+    use egg::{EGraph, Extractor, Pattern, Runner, Searcher};
 
     use crate::{
         extractors::GreedyExtractor,
-        language::{ir::Mio, transforms::tables_to_egraph},
+        language::{
+            ir::{Mio, MioAnalysis},
+            transforms::tables_to_egraph,
+        },
         p4::p4ir::Table,
         rewrites::{
             alg_simp::{alg_simpl, predicate_rewrites, rel_comp_rewrites},
@@ -556,7 +530,7 @@ mod test {
             .into_iter()
             .chain(super::stateless::arith_to_alu())
             .chain(elaborator_conversion())
-            // .chain(if_else_raw())
+            .chain(if_else_raw())
             .chain(pred_raw())
             .chain(bool_alu_rewrites())
             .chain(nested_ifs())
@@ -564,41 +538,15 @@ mod test {
             .chain(alg_simpl())
             .chain(lift_ite_compare())
             .chain(lift_ite_cond())
-            // .chain(lift_nested_ite_cond())
+            .chain(lift_nested_ite_cond())
             .chain(predicate_rewrites())
             // .chain(stateful_ite_simpl())
             .collect::<Vec<_>>();
         let runner = Runner::default()
             .with_egraph(egraph)
             .with_node_limit(10_000)
-            .with_time_limit(Duration::from_secs(10));
+            .with_time_limit(Duration::from_secs(5));
         let runner = runner.run(rewrites.iter());
-        // runner.egraph.dot().to_pdf(filename).unwrap();
-        // let pattern = "(E ?t meta.drop
-        //     (ite (!= ?x ?y)
-        //          (ite (= ?w ?n) (+ ?c1 meta.drop) (+ ?c2 meta.drop))
-        //          (ite (= ?a ?b) 0 1)
-        //     )
-        // )".parse::<Pattern<Mio>>().unwrap();
-        // let pattern = "(E ?t meta.drop (ite
-        //     (rel-alu ?op1 ?r ?rhs1)
-        //     (ite
-        //         (rel-alu ?op2 ?r1 ?rhs2)
-        //         (+ ?r2 ?x)
-        //         (+ ?r3 ?y)
-        //     )
-        //     (ite
-        //         (rel-alu ?op3 ?r4 ?rhs3)
-        //         (+ ?r5 ?z)
-        //         (+ ?r6 ?w)
-        //     )
-        // ))".parse::<Pattern<Mio>>().unwrap();
-        let pattern = "(E ?t meta.drop
-            (stateful-alu alu-ite ?v ?c ?t1 ?t2)
-        )"
-        .parse::<Pattern<Mio>>()
-        .unwrap();
-        println!("{:?}", pattern.search(&runner.egraph));
         let greedy_ext = GreedyExtractor::new(&runner.egraph, 1);
         let extractor = Extractor::new(&runner.egraph, greedy_ext);
         let (best_cost, best) = extractor.find_best(root);

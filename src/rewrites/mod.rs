@@ -272,7 +272,7 @@ pub fn elaborator_conversion() -> Vec<RW> {
 struct AluApplier {
     alu_type: &'static str,
     alu_op: &'static str,
-    operands: Vec<Var>,
+    operands: Vec<&'static str>,
 }
 
 impl AluApplier {
@@ -280,7 +280,7 @@ impl AluApplier {
         Self {
             alu_type,
             alu_op,
-            operands: operands.into_iter().map(|s| s.parse().unwrap()).collect(),
+            operands,
         }
     }
 }

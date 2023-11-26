@@ -673,6 +673,7 @@ pub mod ir {
             match &egraph[id].nodes[0] {
                 Mio::ArithAluOps(op) => Ok(op.to_string()),
                 Mio::RelAluOps(op) => Ok(op.to_string()),
+                Mio::BoolAluOps(op) => Ok(op.to_string()),
                 _ => Err(()),
             }
         }
@@ -769,6 +770,13 @@ pub mod ir {
             return Self::read_set(egraph, id)
                 .iter()
                 .filter(|x| x.contains("global."))
+                .count();
+        }
+
+        pub fn stateless_read_count(egraph: &egg::EGraph<Mio, MioAnalysis>, id: Id) -> usize {
+            return Self::read_set(egraph, id)
+                .iter()
+                .filter(|x| !x.contains("global."))
                 .count();
         }
 

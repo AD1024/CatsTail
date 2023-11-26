@@ -86,11 +86,11 @@ pub fn rel_comp_rewrites() -> Vec<RW> {
         rewrite!("lt-comp-lt-0"; "(< ?x ?y)" => "(< (- ?x ?y) 0)"),
         rewrite!("gt-comp-gt-0"; "(> ?x ?y)" => "(< 0 (- ?x ?y))"),
         rewrite!("lt-comp-sub"; "(< (- ?x ?y) ?z)" => "(> ?y (- ?x ?z))"),
-        // rewrite!("eq-to-zero-check"; "(= ?x ?y)" => "(!= (- (+ ?x 1) ?y) 0)"
-        //         if is_integer("?x".parse().unwrap())
-        //         if is_integer("?y".parse().unwrap())),
-        // rewrite!("neq-to-zero-check"; "(!= ?x ?y)" => "(!= (- ?x ?y) 0)"
-        //         if is_integer("?x".parse().unwrap())
-        //         if is_integer("?y".parse().unwrap())),
+        rewrite!("eq-to-zero-check"; "(= ?x ?y)" => "(!= (- (+ ?x 1) ?y) 0)"
+                if is_integer("?x".parse().unwrap())
+                if is_integer("?y".parse().unwrap())),
+        rewrite!("neq-to-zero-check"; "(!= ?x ?y)" => "(!= (- ?x ?y) 0)"
+                if is_integer("?x".parse().unwrap())
+                if is_integer("?y".parse().unwrap())),
     ]
 }
