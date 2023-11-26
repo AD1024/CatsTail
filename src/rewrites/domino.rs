@@ -460,22 +460,20 @@ pub mod stateful {
                 rule_name: egg::Symbol,
             ) -> Vec<Id> {
                 let comp_id = subst[self.comp];
-                if let Ok((op_name, args)) = MioAnalysis::decompose_alu_ops(egraph, comp_id) {
-                    let pattern = format!(
-                        "(stateful-alu {} ?v {})",
-                        op_name,
-                        args.into_iter()
-                            .map(|x| x.to_string())
-                            .collect::<Vec<_>>()
-                            .join(" ")
-                    );
-                    return pattern.parse::<Pattern<Mio>>().unwrap().apply_one(
-                        egraph,
-                        eclass,
-                        subst,
-                        searcher_ast,
-                        rule_name,
-                    );
+                if let Ok((_op_name, args)) = MioAnalysis::decompose_alu_ops(egraph, comp_id) {
+                    let vid = subst["?v".parse().unwrap()];
+                    if let Ok(op_id) = MioAnalysis::get_alu_op_id(egraph, comp_id) {
+                        let salu_id = egraph.add(Mio::SAlu(
+                            vec![op_id, vid]
+                                .into_iter()
+                                .chain(args.into_iter())
+                                .collect(),
+                        ));
+                        egraph.union(eclass, salu_id);
+                        return vec![salu_id];
+                    } else {
+                        vec![]
+                    }
                 } else {
                     vec![]
                 }
@@ -540,7 +538,7 @@ mod test {
             .chain(lift_ite_cond())
             .chain(lift_nested_ite_cond())
             .chain(predicate_rewrites())
-            // .chain(stateful_ite_simpl())
+            .chain(stateful_ite_simpl())
             .collect::<Vec<_>>();
         let runner = Runner::default()
             .with_egraph(egraph)
@@ -551,8 +549,13 @@ mod test {
         let extractor = Extractor::new(&runner.egraph, greedy_ext);
         let (best_cost, best) = extractor.find_best(root);
         let end_time = std::time::Instant::now();
-        println!("best cost: {}", best_cost);
-        println!("best: {}", best.pretty(80));
+        // println!("best cost: {}", best_cost);
+        // println!("best: {}", best.pretty(80));
+        assert!(
+            best_cost < usize::MAX,
+            "Cannot map the following program:\n{}",
+            best.pretty(80)
+        );
         println!("time: {:?}", end_time - start_time);
     }
 

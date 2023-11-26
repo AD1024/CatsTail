@@ -678,6 +678,18 @@ pub mod ir {
             }
         }
 
+        pub fn get_alu_op_id(egraph: &egg::EGraph<Mio, MioAnalysis>, id: Id) -> Result<Id, ()> {
+            for node in &egraph[id].nodes {
+                match node {
+                    Mio::ArithAlu(ops) | Mio::RelAlu(ops) | Mio::BoolAlu(ops) | Mio::SAlu(ops) => {
+                        return Ok(ops[0])
+                    }
+                    _ => (),
+                }
+            }
+            Err(())
+        }
+
         /// decompose an alu operation into operator + operands (id)
         pub fn decompose_alu_ops(
             egraph: &egg::EGraph<Mio, MioAnalysis>,
@@ -1691,12 +1703,12 @@ pub mod transforms {
                 let mut action_ids = vec![];
                 while let Some((k, id)) = worklist.pop() {
                     let expr = recexpr[id].build_recexpr(|id| recexpr[id].clone());
-                    println!("{} =>\n{}", k, expr.pretty(80));
+                    // println!("{} =>\n{}", k, expr.pretty(80));
                     let egraph_id = egraph.add_expr(&expr);
                     let evar_id = egraph.add(Mio::Symbol(k.clone()));
                     let egraph_id = egraph.add(Mio::Elaborate([table_name_id, evar_id, egraph_id]));
                     if let MioAnalysisData::Action(u) = &mut egraph[egraph_id].data {
-                        println!("Action update {}:\n{:?}", k, u);
+                        // println!("Action update {}:\n{:?}", k, u);
                         u.writes = u
                             .writes
                             .union(&HashSet::from([k.clone()]))
@@ -1766,7 +1778,7 @@ mod test {
     fn run_walk_stmt(stmts: Stmt, ctx: &HashMap<String, Mio>) {
         let (recexpr, built, _reads, _writes) = stmt_to_recexpr(&stmts);
         // egraph.dot().to_pdf("stmt_to_egraph.pdf").unwrap();
-        println!("Stmt:\n{:?}", stmts);
+        // println!("Stmt:\n{:?}", stmts);
         let mut p4ctx = ctx.clone();
         interp(&stmts, &mut p4ctx);
         for (v, val) in built.iter() {
@@ -1774,11 +1786,11 @@ mod test {
             let result = interp_recexpr(&expr, &ctx);
             let default = &Mio::Symbol(v.clone());
             let stmt_eval = p4ctx.get(v).unwrap_or(default);
-            println!(
-                "Stmt eval: {:?}",
-                p4ctx.get(v).unwrap_or(&Mio::Symbol(v.clone()))
-            );
-            println!("Mio eval: {:?}", result);
+            // println!(
+            //     "Stmt eval: {:?}",
+            //     p4ctx.get(v).unwrap_or(&Mio::Symbol(v.clone()))
+            // );
+            // println!("Mio eval: {:?}", result);
             assert_eq!(stmt_eval, &result);
         }
     }

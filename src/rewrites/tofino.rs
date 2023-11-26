@@ -179,9 +179,14 @@ mod test {
         let extractor = Extractor::new(&runner.egraph, greedy_ext);
         let (best_cost, best) = extractor.find_best(root);
         let end_time = std::time::Instant::now();
-        println!("best cost: {}", best_cost);
-        println!("best: {}", best.pretty(80));
-        println!("mappable: {}", best_cost != usize::MAX);
+        // println!("best cost: {}", best_cost);
+        // println!("best: {}", best.pretty(80));
+        // println!("mappable: {}", best_cost != usize::MAX);
+        assert!(
+            best_cost < usize::MAX,
+            "Cannot map the following:\n{}",
+            best.pretty(80)
+        );
         println!("time: {:?}", end_time - start_time);
         end_time - start_time
     }
