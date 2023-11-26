@@ -539,7 +539,9 @@ mod test {
                 bool_alu_rewrites, if_else_raw, nested_ifs, pred_raw, stateful_ite_simpl,
             },
             elaborator_conversion, lift_stateless,
-            table_transformations::{lift_ite_cond, parallelize_independent_tables, seq_elim},
+            table_transformations::{
+                lift_ite_cond, lift_nested_ite_cond, parallelize_independent_tables, seq_elim,
+            },
         },
     };
 
@@ -550,13 +552,14 @@ mod test {
             .into_iter()
             .chain(super::stateless::arith_to_alu())
             .chain(elaborator_conversion())
-            .chain(if_else_raw())
+            // .chain(if_else_raw())
             .chain(pred_raw())
             .chain(bool_alu_rewrites())
             // .chain(nested_ifs())
             .chain(rel_comp_rewrites())
             .chain(alg_simpl())
             .chain(lift_ite_cond())
+            .chain(lift_nested_ite_cond())
             .chain(predicate_rewrites())
             // .chain(stateful_ite_simpl())
             .collect::<Vec<_>>();

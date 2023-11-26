@@ -139,6 +139,89 @@ pub fn comm_independent_tables() -> Vec<RW> {
     ];
 }
 
+fn compute_lift_cond(
+    egraph: &mut EGraph<Mio, MioAnalysis>,
+    c: Id,
+    ib: Id,
+    rb: Id,
+) -> Option<(String, Id, Id)> {
+    let ib_stateful_rd = MioAnalysis::stateful_reads(egraph, ib);
+    let rb_stateful_rd = MioAnalysis::stateful_reads(egraph, rb);
+    let compute_rd = ib_stateful_rd
+        .union(&rb_stateful_rd)
+        .cloned()
+        .collect::<HashSet<_>>();
+    for compare_node in egraph[c].nodes.clone() {
+        match compare_node {
+            Mio::Lt([lhs, rhs])
+            | Mio::Gt([lhs, rhs])
+            | Mio::Le([lhs, rhs])
+            | Mio::Ge([lhs, rhs])
+            | Mio::Eq([lhs, rhs])
+            | Mio::Neq([lhs, rhs])
+            | Mio::LAnd([lhs, rhs])
+            | Mio::LOr([lhs, rhs]) => {
+                let (var_name, new_comp, compute_phv) =
+                    // comsider ?c to be (?op lhs rhs)
+                    // we can lift lhs or rhs to some new phv field
+                    // if it only involves with 1 stateful read
+                    if MioAnalysis::stateful_read_count(egraph, lhs)
+                        == 1
+                    {
+                        // if the computation depends on some global variables
+                        // that is also required by lhs or rhs, then we cannot
+                        // lift it (read then write to the same global variable has to be atomic)
+                        if MioAnalysis::stateful_reads(egraph, lhs)
+                            .intersection(&compute_rd)
+                            .count()
+                            > 0
+                        {
+                            continue;
+                        }
+                        let new_phv_field = egraph.analysis.new_var(
+                            MioAnalysis::get_type(egraph, lhs),
+                            lhs.to_string(),
+                        );
+                        let phv_id = egraph
+                            .add(Mio::Symbol(new_phv_field.clone()));
+                        (
+                            new_phv_field,
+                            MioAnalysis::add_expr(egraph, &MioAnalysis::get_operator_repr(&compare_node), vec![phv_id, rhs]),
+                            lhs,
+                        )
+                    } else if MioAnalysis::stateful_read_count(
+                        egraph, rhs,
+                    ) == 1
+                    {
+                        if MioAnalysis::stateful_reads(egraph, rhs)
+                            .intersection(&compute_rd)
+                            .count()
+                            > 0
+                        {
+                            continue;
+                        }
+                        let new_phv_field = egraph.analysis.new_var(
+                            MioAnalysis::get_type(egraph, rhs),
+                            rhs.to_string(),
+                        );
+                        let phv_id = egraph
+                            .add(Mio::Symbol(new_phv_field.clone()));
+                        (
+                            new_phv_field,
+                            MioAnalysis::add_expr(egraph, &MioAnalysis::get_operator_repr(&compare_node), vec![lhs, phv_id]),
+                            rhs,
+                        )
+                    } else {
+                        continue;
+                    };
+                return Some((var_name, new_comp, compute_phv));
+            }
+            _ => {}
+        }
+    }
+    return None;
+}
+
 pub fn lift_ite_cond() -> Vec<RW> {
     struct IteToGIteApplier {
         keys: &'static str,
@@ -175,7 +258,9 @@ pub fn lift_ite_cond() -> Vec<RW> {
                     assert_eq!(MioAnalysis::elaborations(egraph, *elab).len(), 1);
                     let comp_id = MioAnalysis::unwrap_elaborator(egraph, *elab);
                     let evar = MioAnalysis::get_single_elaboration(egraph, *elab);
-                    if !MioAnalysis::has_stateful_elaboration(egraph, *elab) {
+                    if !MioAnalysis::has_stateful_elaboration(egraph, *elab)
+                        && MioAnalysis::stateful_read_count(egraph, *elab) <= 1
+                    {
                         continue;
                     }
                     if MioAnalysis::elaborations(egraph, *elab)
@@ -188,85 +273,192 @@ pub fn lift_ite_cond() -> Vec<RW> {
                     for node in egraph[comp_id].nodes.clone() {
                         match node {
                             Mio::Ite([c, ib, rb]) => {
-                                let ib_stateful_rd = MioAnalysis::stateful_reads(egraph, ib);
-                                let rb_stateful_rd = MioAnalysis::stateful_reads(egraph, rb);
-                                let compute_rd = ib_stateful_rd
-                                    .union(&rb_stateful_rd)
-                                    .cloned()
-                                    .collect::<HashSet<_>>();
-                                for compare_node in egraph[c].nodes.clone() {
-                                    match compare_node {
-                                        Mio::Lt([lhs, rhs])
-                                        | Mio::Gt([lhs, rhs])
-                                        | Mio::Le([lhs, rhs])
-                                        | Mio::Ge([lhs, rhs])
-                                        | Mio::Eq([lhs, rhs])
-                                        | Mio::Neq([lhs, rhs])
-                                        | Mio::LAnd([lhs, rhs])
-                                        | Mio::LOr([lhs, rhs]) => {
-                                            let (var_name, new_comp, compute_phv) =
-                                                // comsider ?c to be (?op lhs rhs)
-                                                // we can lift lhs or rhs to some new phv field
-                                                // if it only involves with 1 stateful read
-                                                if MioAnalysis::stateful_read_count(egraph, lhs)
-                                                    == 1
-                                                {
-                                                    // if the computation depends on some global variables
-                                                    // that is also required by lhs or rhs, then we cannot
-                                                    // lift it (read then write to the same global variable has to be atomic)
-                                                    if MioAnalysis::stateful_reads(egraph, lhs)
-                                                        .intersection(&compute_rd)
-                                                        .count()
-                                                        > 0
-                                                    {
-                                                        continue;
-                                                    }
-                                                    let new_phv_field = egraph.analysis.new_var(
-                                                        MioAnalysis::get_type(egraph, lhs),
-                                                        lhs.to_string(),
-                                                    );
-                                                    let phv_id = egraph
-                                                        .add(Mio::Symbol(new_phv_field.clone()));
-                                                    (
-                                                        new_phv_field,
-                                                        MioAnalysis::add_expr(egraph, &MioAnalysis::get_operator_repr(&compare_node), vec![phv_id, rhs]),
-                                                        lhs,
-                                                    )
-                                                } else if MioAnalysis::stateful_read_count(
-                                                    egraph, rhs,
-                                                ) == 1
-                                                {
-                                                    if MioAnalysis::stateful_reads(egraph, rhs)
-                                                        .intersection(&compute_rd)
-                                                        .count()
-                                                        > 0
-                                                    {
-                                                        continue;
-                                                    }
-                                                    let new_phv_field = egraph.analysis.new_var(
-                                                        MioAnalysis::get_type(egraph, rhs),
-                                                        rhs.to_string(),
-                                                    );
-                                                    let phv_id = egraph
-                                                        .add(Mio::Symbol(new_phv_field.clone()));
-                                                    (
-                                                        new_phv_field,
-                                                        MioAnalysis::add_expr(egraph, &MioAnalysis::get_operator_repr(&compare_node), vec![lhs, phv_id]),
-                                                        rhs,
-                                                    )
-                                                } else {
-                                                    continue;
-                                                };
-                                            let new_ite = egraph.add(Mio::Ite([new_comp, ib, rb]));
-                                            subsplit.push((var_name, compute_phv));
-                                            split_reads.extend(MioAnalysis::stateful_reads(
-                                                egraph,
-                                                compute_phv,
-                                            ));
-                                            subremain.push((evar.clone(), new_ite));
-                                            fixed.insert(*elab);
-                                            expr_map.insert(c, new_comp);
-                                            break;
+                                if let Some((var_name, new_comp, compute_phv)) =
+                                    compute_lift_cond(egraph, c, ib, rb)
+                                {
+                                    let new_ite = egraph.add(Mio::Ite([new_comp, ib, rb]));
+                                    subsplit.push((var_name, compute_phv));
+                                    split_reads
+                                        .extend(MioAnalysis::stateful_reads(egraph, compute_phv));
+                                    subremain.push((evar.clone(), new_ite));
+                                    fixed.insert(*elab);
+                                    expr_map.insert(c, new_comp);
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                for elab in elaborators.iter() {
+                    if !fixed.contains(elab) {
+                        let comp_id = MioAnalysis::unwrap_elaborator(egraph, *elab);
+                        let evar = MioAnalysis::get_single_elaboration(egraph, *elab);
+                        if split_reads.contains(&evar) {
+                            subsplit.push((evar, comp_id));
+                            continue;
+                        }
+                        for node in egraph[comp_id].nodes.clone() {
+                            match node {
+                                Mio::Ite([c, ib, rb]) => {
+                                    fixed.insert(*elab);
+                                    if expr_map.contains_key(&c) {
+                                        let new_ite = egraph.add(Mio::Ite([
+                                            *expr_map.get(&c).unwrap(),
+                                            ib,
+                                            rb,
+                                        ]));
+                                        subremain.push((evar.clone(), new_ite));
+                                    } else {
+                                        subremain.push((evar.clone(), comp_id));
+                                    }
+                                }
+                                _ => (),
+                            }
+                        }
+                        if !fixed.contains(elab) {
+                            subremain.push((evar.clone(), comp_id));
+                        }
+                    }
+                }
+                if subremain.len() > 0 {
+                    remain.push(subremain)
+                }
+                if subsplit.len() > 0 {
+                    split.push(subsplit);
+                }
+            }
+            if remain.len() == 0 || split.len() == 0 {
+                return vec![];
+            }
+            let (remain_elabs, remain_comps) = remain
+                .into_iter()
+                .map(|v| {
+                    v.into_iter()
+                        .map(|(v, id)| (HashSet::from([v]), id))
+                        .unzip::<_, _, Vec<_>, Vec<_>>()
+                })
+                .unzip::<_, _, Vec<_>, Vec<_>>();
+            let (split_elabs, split_comps) = split
+                .into_iter()
+                .map(|v| {
+                    v.into_iter()
+                        .map(|(v, id)| (HashSet::from([v]), id))
+                        .unzip::<_, _, Vec<_>, Vec<_>>()
+                })
+                .unzip::<_, _, Vec<_>, Vec<_>>();
+            let prev_table_id =
+                MioAnalysis::build_table(egraph, prev_table, kid, split_comps, split_elabs);
+            let next_table_id =
+                MioAnalysis::build_table(egraph, next_table, kid, remain_comps, remain_elabs);
+            let seq_id = egraph.add(Mio::Seq([prev_table_id, next_table_id]));
+            egraph.union(eclass, seq_id);
+            vec![seq_id, eclass]
+        }
+    }
+    vec![rewrite!("lift_ite_cond"; "(gite ?k ?a)" => {
+        IteToGIteApplier {
+            keys: "?k",
+            actions: "?a",
+        }
+    })]
+}
+
+pub fn lift_nested_ite_cond() -> Vec<RW> {
+    struct IteToGIteApplier {
+        keys: &'static str,
+        actions: &'static str,
+    }
+    impl Applier<Mio, MioAnalysis> for IteToGIteApplier {
+        fn apply_one(
+            &self,
+            egraph: &mut EGraph<Mio, MioAnalysis>,
+            eclass: Id,
+            subst: &Subst,
+            searcher_ast: Option<&egg::PatternAst<Mio>>,
+            rule_name: egg::Symbol,
+        ) -> Vec<Id> {
+            let kid = subst[self.keys.parse().unwrap()];
+            let aid = subst[self.actions.parse().unwrap()];
+            let elaborations = MioAnalysis::aggregate_elaborators(egraph, aid);
+            let mut remain = vec![];
+            let mut split = vec![];
+            let mut fixed = HashSet::new();
+            let mut expr_map = HashMap::new();
+            let prev_table = egraph
+                .analysis
+                .new_table_name(MioAnalysis::get_table_name(egraph, eclass));
+            let next_table = egraph
+                .analysis
+                .new_table_name(MioAnalysis::get_table_name(egraph, eclass));
+            for elaborators in elaborations.iter() {
+                // check statueful updates
+                let mut subremain = vec![];
+                let mut subsplit = vec![];
+                let mut split_reads = HashSet::new();
+                for elab in elaborators.iter() {
+                    assert_eq!(MioAnalysis::elaborations(egraph, *elab).len(), 1);
+                    let comp_id = MioAnalysis::unwrap_elaborator(egraph, *elab);
+                    let evar = MioAnalysis::get_single_elaboration(egraph, *elab);
+                    if !MioAnalysis::has_stateful_elaboration(egraph, *elab)
+                        && MioAnalysis::stateful_read_count(egraph, *elab) <= 1
+                    {
+                        continue;
+                    }
+                    if MioAnalysis::elaborations(egraph, *elab)
+                        .union(&MioAnalysis::stateful_reads(egraph, *elab))
+                        .count()
+                        <= 1
+                    {
+                        continue;
+                    }
+                    'outter_loop: for node in egraph[comp_id].nodes.clone() {
+                        match node {
+                            Mio::Ite([c, ib, rb]) => {
+                                for ib_node in egraph[ib].nodes.clone() {
+                                    match ib_node {
+                                        Mio::Ite([ib_c, ib_ib, ib_rb]) => {
+                                            if let Some((var_name, new_comp, compute_phv)) =
+                                                compute_lift_cond(egraph, ib_c, ib_ib, ib_rb)
+                                            {
+                                                let inner_ite =
+                                                    egraph.add(Mio::Ite([new_comp, ib_ib, ib_rb]));
+                                                let new_ite =
+                                                    egraph.add(Mio::Ite([c, inner_ite, rb]));
+                                                subsplit.push((var_name, compute_phv));
+                                                split_reads.extend(MioAnalysis::stateful_reads(
+                                                    egraph,
+                                                    compute_phv,
+                                                ));
+                                                subremain.push((evar.clone(), new_ite));
+                                                fixed.insert(*elab);
+                                                expr_map.insert(ib_c, new_comp);
+                                                break 'outter_loop;
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                for rb_node in egraph[rb].nodes.clone() {
+                                    match rb_node {
+                                        Mio::Ite([rb_c, rb_ib, rb_rb]) => {
+                                            if let Some((var_name, new_comp, compute_phv)) =
+                                                compute_lift_cond(egraph, rb_c, rb_ib, rb_rb)
+                                            {
+                                                let inner_ite =
+                                                    egraph.add(Mio::Ite([new_comp, rb_ib, rb_rb]));
+                                                let new_ite =
+                                                    egraph.add(Mio::Ite([c, ib, inner_ite]));
+                                                subsplit.push((var_name, compute_phv));
+                                                split_reads.extend(MioAnalysis::stateful_reads(
+                                                    egraph,
+                                                    compute_phv,
+                                                ));
+                                                subremain.push((evar.clone(), new_ite));
+                                                fixed.insert(*elab);
+                                                expr_map.insert(rb_c, new_comp);
+                                                break 'outter_loop;
+                                            }
                                         }
                                         _ => {}
                                     }
@@ -342,7 +534,7 @@ pub fn lift_ite_cond() -> Vec<RW> {
             vec![seq_id, eclass]
         }
     }
-    vec![rewrite!("lift_ite_cond"; "(gite ?k ?a)" => {
+    vec![rewrite!("lift_nested_cond"; "(gite ?k ?a)" => {
         IteToGIteApplier {
             keys: "?k",
             actions: "?a",
