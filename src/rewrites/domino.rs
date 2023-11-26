@@ -540,7 +540,7 @@ mod test {
             },
             elaborator_conversion, lift_stateless,
             table_transformations::{
-                lift_ite_cond, lift_nested_ite_cond, parallelize_independent_tables, seq_elim,
+                lift_ite_compare, parallelize_independent_tables, seq_elim, lift_ite_cond, lift_nested_ite_cond,
             },
         },
     };
@@ -558,6 +558,7 @@ mod test {
             // .chain(nested_ifs())
             .chain(rel_comp_rewrites())
             .chain(alg_simpl())
+            .chain(lift_ite_compare())
             .chain(lift_ite_cond())
             .chain(lift_nested_ite_cond())
             .chain(predicate_rewrites())
