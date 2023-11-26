@@ -70,35 +70,9 @@ impl<'a> CostFunction<Mio> for GreedyExtractor<'a> {
                 1
             }
             Mio::ArithAluOps(_) | Mio::RelAluOps(_) => 0,
-            // Mio::Ite(_) => 1,
             Mio::GIte(_) => 1,
             Mio::Actions(_) => 1,
-            Mio::Elaborations(elabs) => {
-                let mut num_stateful_updates = HashSet::new();
-                let mut num_stateless_upates = HashSet::new();
-                let mut c = 0;
-                for elaboration in elabs.iter() {
-                    if MioAnalysis::has_stateful_elaboration(self.egraph, *elaboration) {
-                        num_stateful_updates
-                            .extend(MioAnalysis::elaborations(self.egraph, *elaboration).iter());
-                    }
-                    if MioAnalysis::has_stateless_elaboration(self.egraph, *elaboration) {
-                        num_stateless_upates
-                            .extend(MioAnalysis::elaborations(self.egraph, *elaboration).iter());
-                    }
-                    if num_stateful_updates.len() > self.stateful_update_limit
-                        || num_stateless_upates.len() > self.stateless_update_limit
-                    {
-                        c = usize::MAX;
-                    }
-                    if self.effect_disjoint {
-                        if num_stateful_updates.len() > 1 && num_stateless_upates.len() > 1 {
-                            c = usize::MAX;
-                        }
-                    }
-                }
-                c
-            }
+            Mio::Elaborations(_) => 0,
             Mio::Elaborate([_, v, e]) => {
                 if MioAnalysis::stateful_reads(self.egraph, *e)
                     .union(&MioAnalysis::stateful_reads(self.egraph, *v))
@@ -107,7 +81,10 @@ impl<'a> CostFunction<Mio> for GreedyExtractor<'a> {
                 {
                     return usize::MAX;
                 }
-                if MioAnalysis::has_stateful_reads(self.egraph, *v) {
+                // println!("{:?} <== {:?}", self.egraph[*v].nodes, MioAnalysis::has_stateful_reads(self.egraph, *e));
+                if MioAnalysis::has_stateful_reads(self.egraph, *v)
+                    || MioAnalysis::has_stateful_reads(self.egraph, *e)
+                {
                     let mut is_mapped = false;
                     for node in self.egraph[*e].nodes.iter() {
                         match node {

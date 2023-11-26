@@ -20,12 +20,12 @@ pub mod stateless {
         vec![
             rewrite!("domino-add";
                 "(+ ?x ?y)" => { AluApplier::new("arith-alu", "alu-add", vec!["?x", "?y"]) }
-                if is_mapped("?x".parse().unwrap(), None)
-                if is_mapped("?y".parse().unwrap(), None)),
+                if is_mapped("?x".parse().unwrap(), Some(false))
+                if is_mapped("?y".parse().unwrap(), Some(false))),
             rewrite!("domino-sub";
                 "(- ?x ?y)" => { AluApplier::new("arith-alu", "alu-sub", vec!["?x", "?y"]) }
-                if is_mapped("?x".parse().unwrap(), None)
-                if is_mapped("?y".parse().unwrap(), None)),
+                if is_mapped("?x".parse().unwrap(), Some(false))
+                if is_mapped("?y".parse().unwrap(), Some(false))),
             rewrite!("domino-neq";
                 "(!= ?x ?y)" => { AluApplier::new("rel-alu", "alu-neq", vec!["?x", "?y"]) }
                 if is_mapped("?x".parse().unwrap(), None)
@@ -42,9 +42,9 @@ pub mod stateless {
                 "(< ?x ?y)" => { AluApplier::new("rel-alu", "alu-lt", vec!["?x", "?y"]) }
                 if is_mapped("?x".parse().unwrap(), None)
                 if is_mapped("?y".parse().unwrap(), None)),
-            rewrite!("domino-ite-0";
-                "(ite ?c ?x ?y)" => { AluApplier::new("arith-alu", "alu-ite", vec!["?c", "?x", "?y"]) }
-                if neq_0_check_match("?c".parse().unwrap())),
+            // rewrite!("domino-ite-0";
+            //     "(ite ?c ?x ?y)" => { AluApplier::new("arith-alu", "alu-ite", vec!["?c", "?x", "?y"]) }
+            //     if neq_0_check_match("?c".parse().unwrap())),
             rewrite!("domino-neq-0-or";
                 "(lor ?x ?y)" => { AluApplier::new("bool-alu", "alu-or", vec!["?x", "?y"]) }
                 if neq_0_check_match("?x".parse().unwrap())
@@ -143,10 +143,7 @@ pub mod stateful {
     pub fn global_or_0(v: Var) -> impl Fn(&mut EGraph<Mio, MioAnalysis>, Id, &Subst) -> bool {
         move |egraph, _, subst| {
             let vid = subst[v];
-            if MioAnalysis::get_constant(egraph, vid) == Some(Constant::Int(0)) {
-                return true;
-            }
-            if MioAnalysis::get_constant(egraph, vid) == Some(Constant::Bool(false)) {
+            if MioAnalysis::get_constant(egraph, vid).is_some() {
                 return true;
             }
             let pattern = "(arith-alu alu-global ?x)".parse::<Pattern<Mio>>().unwrap();
@@ -225,8 +222,8 @@ pub mod stateful {
                 let pattern = format!(
                     "(E ?t ?v (stateful-alu alu-ite {}
                     (rel-alu {} {} {})
-                    (+ {} {})
-                    (+ {} {})))",
+                    (arith-alu alu-add {} {})
+                    (arith-alu alu-add {} {})))",
                     evar, self.op, self.r, self.rhs, self.z, self.x, self.w, self.y
                 );
                 return pattern.parse::<Pattern<Mio>>().unwrap().apply_one(
@@ -347,13 +344,13 @@ pub mod stateful {
                     (rel-alu ?op1 ?r ?rhs1)
                     (ite
                         (rel-alu ?op2 ?r1 ?rhs2)
-                        (arith-alu alu-add ?r2 ?x)
-                        (arith-alu alu-add ?r3 ?y)
+                        (+ ?r2 ?x)
+                        (+ ?r3 ?y)
                     )
                     (ite
                         (rel-alu ?op3 ?r4 ?rhs3)
-                        (arith-alu alu-add ?r5 ?z)
-                        (arith-alu alu-add ?r6 ?w)
+                        (+ ?r5 ?z)
+                        (+ ?r6 ?w)
                     )
                 ))" => { NestedIfsApplier {
                     op1: "?op1".parse().unwrap(),
@@ -372,28 +369,28 @@ pub mod stateful {
                     z: "?z".parse().unwrap(),
                     w: "?w".parse().unwrap(),
                 } }
-            if check_relops("?op1".parse().unwrap(), vec!["alu-eq", "alu-neq", "alu-gt", "alu-lt"])
-            if check_relops("?op2".parse().unwrap(), vec!["alu-eq", "alu-neq", "alu-gt", "alu-lt"])
-            if check_relops("?op3".parse().unwrap(), vec!["alu-eq", "alu-neq", "alu-gt", "alu-lt"])
-            if global_or_0("?r".parse().unwrap())
-            if global_or_0("?r1".parse().unwrap())
-            if global_or_0("?r2".parse().unwrap())
-            if global_or_0("?r3".parse().unwrap())
-            if global_or_0("?r4".parse().unwrap())
-            if same_if_is_var("?r".parse().unwrap(), "?r1".parse().unwrap())
-            if same_if_is_var("?r".parse().unwrap(), "?r2".parse().unwrap())
-            if same_if_is_var("?r".parse().unwrap(), "?r3".parse().unwrap())
-            if same_if_is_var("?r".parse().unwrap(), "?r4".parse().unwrap())
-            if check_arith_alu("?rhs1".parse().unwrap())
-            if check_arith_alu("?rhs2".parse().unwrap())
-            if check_arith_alu("?rhs3".parse().unwrap())
-            if check_arith_alu("?x".parse().unwrap())
-            if check_arith_alu("?y".parse().unwrap())
-            if check_arith_alu("?z".parse().unwrap())
-            if check_arith_alu("?w".parse().unwrap())
+            // if check_relops("?op1".parse().unwrap(), vec!["alu-eq", "alu-neq", "alu-gt", "alu-lt"])
+            // if check_relops("?op2".parse().unwrap(), vec!["alu-eq", "alu-neq", "alu-gt", "alu-lt"])
+            // if check_relops("?op3".parse().unwrap(), vec!["alu-eq", "alu-neq", "alu-gt", "alu-lt"])
+            // if global_or_0("?r".parse().unwrap())
+            // if global_or_0("?r1".parse().unwrap())
+            // if global_or_0("?r2".parse().unwrap())
+            // if global_or_0("?r3".parse().unwrap())
+            // if global_or_0("?r4".parse().unwrap())
+            // if same_if_is_var("?r".parse().unwrap(), "?r1".parse().unwrap())
+            // if same_if_is_var("?r".parse().unwrap(), "?r2".parse().unwrap())
+            // if same_if_is_var("?r".parse().unwrap(), "?r3".parse().unwrap())
+            // if same_if_is_var("?r".parse().unwrap(), "?r4".parse().unwrap())
+            // if check_arith_alu("?rhs1".parse().unwrap())
+            // if check_arith_alu("?rhs2".parse().unwrap())
+            // if check_arith_alu("?rhs3".parse().unwrap())
+            // if check_arith_alu("?x".parse().unwrap())
+            // if check_arith_alu("?y".parse().unwrap())
+            // if check_arith_alu("?z".parse().unwrap())
+            // if check_arith_alu("?w".parse().unwrap())
             // at most two PHV fields to be read in compute
             // at most 0 stateful read
-            if check_read_limit(vec!["?x", "?y", "?z", "?w", "?rhs1", "?rhs2", "?rhs3"], 2, 0)
+            // if check_read_limit(vec!["?x", "?y", "?z", "?w", "?rhs1", "?rhs2", "?rhs3"], 2, 0)
         )]
     }
 
@@ -442,7 +439,7 @@ pub mod stateful {
             rewrite!("domino-stateful-pred-raw";
             "(E ?t ?v (ite
                     (rel-alu ?op ?r ?rhs)
-                    (arith-alu alu-add ?r1 ?x)
+                    (+ ?r1 ?x)
                     (arith-alu alu-global ?g)
                 ))" => { PredRawApplier {
                 op: "?op".parse().unwrap(),
@@ -520,6 +517,12 @@ pub mod stateful {
                     comp: "?t1".parse().unwrap()
                 }
             }),
+            rewrite!("stateful-ite-same-branch-simpl";
+            "(stateful-alu alu-ite ?v ?c ?t1 ?t1)" => {
+                SAluIteSimplApplier {
+                    comp: "?t1".parse().unwrap()
+                }
+            }),
         ]
     }
 }
@@ -527,11 +530,11 @@ pub mod stateful {
 mod test {
     use std::time::Duration;
 
-    use egg::{Extractor, Runner};
+    use egg::{Extractor, Pattern, Runner, Searcher};
 
     use crate::{
         extractors::GreedyExtractor,
-        language::transforms::tables_to_egraph,
+        language::{ir::Mio, transforms::tables_to_egraph},
         p4::p4ir::Table,
         rewrites::{
             alg_simp::{alg_simpl, predicate_rewrites, rel_comp_rewrites},
@@ -540,7 +543,8 @@ mod test {
             },
             elaborator_conversion, lift_stateless,
             table_transformations::{
-                lift_ite_compare, parallelize_independent_tables, seq_elim, lift_ite_cond, lift_nested_ite_cond,
+                lift_ite_compare, lift_ite_cond, lift_nested_ite_cond,
+                parallelize_independent_tables, seq_elim,
             },
         },
     };
@@ -555,21 +559,46 @@ mod test {
             // .chain(if_else_raw())
             .chain(pred_raw())
             .chain(bool_alu_rewrites())
-            // .chain(nested_ifs())
+            .chain(nested_ifs())
             .chain(rel_comp_rewrites())
             .chain(alg_simpl())
             .chain(lift_ite_compare())
             .chain(lift_ite_cond())
-            .chain(lift_nested_ite_cond())
+            // .chain(lift_nested_ite_cond())
             .chain(predicate_rewrites())
             // .chain(stateful_ite_simpl())
             .collect::<Vec<_>>();
         let runner = Runner::default()
             .with_egraph(egraph)
-            // .with_node_limit(5_000)
+            .with_node_limit(10_000)
             .with_time_limit(Duration::from_secs(10));
         let runner = runner.run(rewrites.iter());
         // runner.egraph.dot().to_pdf(filename).unwrap();
+        // let pattern = "(E ?t meta.drop
+        //     (ite (!= ?x ?y)
+        //          (ite (= ?w ?n) (+ ?c1 meta.drop) (+ ?c2 meta.drop))
+        //          (ite (= ?a ?b) 0 1)
+        //     )
+        // )".parse::<Pattern<Mio>>().unwrap();
+        // let pattern = "(E ?t meta.drop (ite
+        //     (rel-alu ?op1 ?r ?rhs1)
+        //     (ite
+        //         (rel-alu ?op2 ?r1 ?rhs2)
+        //         (+ ?r2 ?x)
+        //         (+ ?r3 ?y)
+        //     )
+        //     (ite
+        //         (rel-alu ?op3 ?r4 ?rhs3)
+        //         (+ ?r5 ?z)
+        //         (+ ?r6 ?w)
+        //     )
+        // ))".parse::<Pattern<Mio>>().unwrap();
+        let pattern = "(E ?t meta.drop
+            (stateful-alu alu-ite ?v ?c ?t1 ?t2)
+        )"
+        .parse::<Pattern<Mio>>()
+        .unwrap();
+        println!("{:?}", pattern.search(&runner.egraph));
         let greedy_ext = GreedyExtractor::new(&runner.egraph, 1);
         let extractor = Extractor::new(&runner.egraph, greedy_ext);
         let (best_cost, best) = extractor.find_best(root);

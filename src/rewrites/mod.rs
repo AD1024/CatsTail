@@ -235,7 +235,9 @@ impl Applier<Mio, MioAnalysis> for ElaboratorConversion {
         let expr_id = subst[self.expr];
         let elaborations = MioAnalysis::elaborations(egraph, eclass).clone();
         let (op, args) = MioAnalysis::decompose_alu_ops(egraph, expr_id).unwrap();
-        if MioAnalysis::has_stateful_elaboration(egraph, eclass) {
+        if MioAnalysis::has_stateful_elaboration(egraph, eclass)
+            || MioAnalysis::has_stateful_reads(egraph, eclass)
+        {
             // map to stateful alu
             let output_var_id =
                 egraph.add(Mio::Symbol(elaborations.iter().next().unwrap().clone()));

@@ -255,12 +255,16 @@ pub fn lift_ite_compare() -> Vec<RW> {
             let next_table = egraph
                 .analysis
                 .new_table_name(MioAnalysis::get_table_name(egraph, eclass));
+            let mut splitted = HashSet::new();
             for elaborators in elaborations.iter() {
                 // check statueful updates
                 let mut subremain = vec![];
                 let mut subsplit = vec![];
                 let mut split_reads = HashSet::new();
                 for elab in elaborators.iter() {
+                    if fixed.contains(elab) {
+                        continue;
+                    }
                     assert_eq!(MioAnalysis::elaborations(egraph, *elab).len(), 1);
                     let comp_id = MioAnalysis::unwrap_elaborator(egraph, *elab);
                     let evar = MioAnalysis::get_single_elaboration(egraph, *elab);
@@ -283,9 +287,14 @@ pub fn lift_ite_compare() -> Vec<RW> {
                                     compute_lift_cond(egraph, c, ib, rb)
                                 {
                                     let new_ite = egraph.add(Mio::Ite([new_comp, ib, rb]));
-                                    subsplit.push((var_name, compute_phv));
-                                    split_reads
-                                        .extend(MioAnalysis::stateful_reads(egraph, compute_phv));
+                                    if !splitted.contains(&compute_phv) {
+                                        subsplit.push((var_name, compute_phv));
+                                        split_reads.extend(MioAnalysis::stateful_reads(
+                                            egraph,
+                                            compute_phv,
+                                        ));
+                                        splitted.insert(compute_phv);
+                                    }
                                     subremain.push((evar.clone(), new_ite));
                                     fixed.insert(*elab);
                                     expr_map.insert(c, new_comp);
@@ -514,6 +523,8 @@ pub fn lift_nested_ite_cond() -> Vec<RW> {
                     split.push(subsplit);
                 }
             }
+            // println!("lift nested remain: {:?}", remain);
+            // println!("lift nested split: {:?}", split);
             if remain.len() == 0 || split.len() == 0 {
                 return vec![];
             }
@@ -694,6 +705,8 @@ pub fn lift_ite_cond() -> Vec<RW> {
                     split.push(subsplit);
                 }
             }
+            // println!("lift ite cond remain: {:?}", remain);
+            // println!("lift ite cond split: {:?}", split);
             if remain.len() == 0 || split.len() == 0 {
                 return vec![];
             }

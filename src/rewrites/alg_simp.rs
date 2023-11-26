@@ -61,7 +61,7 @@ pub fn predicate_rewrites() -> Vec<RW> {
         rewrite!("demorgan-or"; "(lnot (lor ?x ?y))" => "(land (lnot ?x) (lnot ?y))"),
         rewrite!("demorgan-converse-and"; "(land (lnot ?x) (lnot ?y))" => "(lnot (lor ?x ?y))"),
         rewrite!("demorgan-converse-or"; "(lor (lnot ?x) (lnot ?y))" => "(lnot (land ?x ?y))"),
-        rewrite!("ite-collapse"; "(ite ?c1 ?t3 (ite ?c2 ?t1 ?t2))" => "(ite ?c1 ?t3 ?t1)"), // iff c1 <=> not c2
+        // rewrite!("ite-collapse"; "(ite ?c1 ?t3 (ite ?c2 ?t1 ?t2))" => "(ite ?c1 ?t3 ?t1)"), // iff c1 <=> not c2
         rewrite!("ite-true"; "(ite true ?t1 ?t2)" => "?t1"),
         rewrite!("ite-false"; "(ite false ?t1 ?t2)" => "?t2"),
         rewrite!("ite-same"; "(ite ?c ?t ?t)" => "?t"),
@@ -69,6 +69,10 @@ pub fn predicate_rewrites() -> Vec<RW> {
         rewrite!("ite-intro"; "?t" => "(ite true ?t ?t)"
                 if is_integer("?t".parse().unwrap())),
         rewrite!("trivial-comp"; "true" => "(= 0 0)"),
+        rewrite!("true-not-false"; "(lnot false)" => "true"),
+        rewrite!("false-not-true"; "(lnot true)" => "false"),
+        rewrite!("not-not"; "(lnot (lnot ?x))" => "?x"),
+        rewrite!("ite-reversed-cond"; "(ite ?c ?b1 ?b2)" => "(ite (lnot ?c) ?b2 ?b1)"),
     ]
 }
 
@@ -76,10 +80,17 @@ pub fn rel_comp_rewrites() -> Vec<RW> {
     vec![
         rewrite!("not-eq-neq"; "(!= ?x ?y)" => "(lnot (= ?x ?y))"),
         rewrite!("neq-not-eq"; "(lnot (= ?x ?y))" => "(!= ?x ?y)"),
+        rewrite!("not-neq-neg"; "(lnot (!= ?x ?y))" => "(= ?x ?y)"),
         rewrite!("gt-lt"; "(> ?x ?y)" => "(< ?y ?x)"),
         rewrite!("lt-gt"; "(< ?x ?y)" => "(> ?y ?x)"),
         rewrite!("lt-comp-lt-0"; "(< ?x ?y)" => "(< (- ?x ?y) 0)"),
         rewrite!("gt-comp-gt-0"; "(> ?x ?y)" => "(< 0 (- ?x ?y))"),
         rewrite!("lt-comp-sub"; "(< (- ?x ?y) ?z)" => "(> ?y (- ?x ?z))"),
+        // rewrite!("eq-to-zero-check"; "(= ?x ?y)" => "(!= (- (+ ?x 1) ?y) 0)"
+        //         if is_integer("?x".parse().unwrap())
+        //         if is_integer("?y".parse().unwrap())),
+        // rewrite!("neq-to-zero-check"; "(!= ?x ?y)" => "(!= (- ?x ?y) 0)"
+        //         if is_integer("?x".parse().unwrap())
+        //         if is_integer("?y".parse().unwrap())),
     ]
 }

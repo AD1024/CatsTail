@@ -218,7 +218,7 @@ mod test {
     #[test]
     fn test_tofino_flowlet() {
         let test_fn = || test_tofino_mapping(example_progs::flowlet(), "flowlet.pdf");
-        let avg_time = run_n_times(10, test_fn);
+        let avg_time = run_n_times(1, test_fn);
         println!("flowlet avg time: {:?}", avg_time);
     }
 

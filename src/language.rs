@@ -969,6 +969,7 @@ pub mod ir {
             }
             if let (MioAnalysisData::Action(u1), MioAnalysisData::Action(u2)) = (a.borrow_mut(), &b)
             {
+                // assert_eq!(u1.elaborations, u2.elaborations);
                 let ty = Self::type_unification(&u1.checked_type, &u2.checked_type);
                 let merged = MioAnalysis::new_action_data(
                     u1.reads.union(&u2.reads).cloned().collect(),
