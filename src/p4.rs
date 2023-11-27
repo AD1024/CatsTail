@@ -1,7 +1,7 @@
 pub mod p4ir {
-    use std::{collections::HashMap, rc::Rc};
+    use std::collections::HashMap;
 
-    use egg::{Id, Language, RecExpr};
+    use egg::{Id, RecExpr};
 
     use crate::{
         language::{
@@ -11,6 +11,7 @@ pub mod p4ir {
         utils::RegionedMap,
     };
 
+    #[allow(dead_code)]
     #[derive(Debug, Clone, Hash, PartialEq, Eq)]
     pub enum BinOps {
         Add,
@@ -34,6 +35,7 @@ pub mod p4ir {
     }
 
     impl BinOps {
+        #[allow(dead_code)]
         pub fn to_mio(&self, lhs: Id, rhs: Id) -> Mio {
             match self {
                 Self::Add => Mio::Add([lhs, rhs]),
@@ -57,6 +59,7 @@ pub mod p4ir {
         }
     }
 
+    #[allow(dead_code)]
     #[derive(Debug, Clone, Hash, PartialEq, Eq)]
     pub enum UnOps {
         Neg,
@@ -64,6 +67,7 @@ pub mod p4ir {
         BitNot,
     }
 
+    #[allow(dead_code)]
     impl UnOps {
         pub fn to_mio(&self, arg: Id) -> Mio {
             match self {
@@ -74,6 +78,7 @@ pub mod p4ir {
         }
     }
 
+    #[allow(dead_code)]
     #[derive(Debug, Clone, Hash, PartialEq, Eq)]
     pub enum Expr {
         Var(String),
@@ -83,6 +88,7 @@ pub mod p4ir {
         UnOpExpr(UnOps, Box<Expr>),
     }
 
+    #[allow(dead_code)]
     impl Expr {
         fn to_mio_helper(expr: &Self, result: &mut RecExpr<Mio>) -> Id {
             match expr {
@@ -113,6 +119,7 @@ pub mod p4ir {
         }
     }
 
+    #[allow(dead_code)]
     #[derive(Debug, Clone)]
     pub enum Stmt {
         Assign(Expr, Expr),
@@ -122,6 +129,7 @@ pub mod p4ir {
         Write(String, String),
     }
 
+    #[allow(dead_code)]
     pub fn interp(stmt: &Stmt, ctx: &mut HashMap<String, Mio>) {
         match stmt {
             Stmt::Block(stmts) => {
@@ -151,7 +159,7 @@ pub mod p4ir {
             }
             Stmt::Read(from, to) => {
                 if ctx.contains_key(from) {
-                    let val = ctx.get(from).unwrap().clone();
+                    let _ = ctx.get(from).unwrap().clone();
                 } else {
                     ctx.insert(to.clone(), Mio::Constant(Constant::Int(0)));
                 }
@@ -169,6 +177,7 @@ pub mod p4ir {
         pub actions: HashMap<String, Stmt>,
     }
 
+    #[allow(dead_code)]
     impl Table {
         pub fn new(name: String, keys: Vec<String>) -> Self {
             Self {
@@ -185,7 +194,6 @@ pub mod p4ir {
 }
 
 pub mod macros {
-    use super::p4ir::{BinOps, Expr, Stmt, UnOps};
     macro_rules! var {
         ($v:expr) => {
             Expr::Var($v.to_string())
@@ -348,6 +356,7 @@ pub mod example_progs {
         p4ir::{Expr, Stmt, Table},
     };
 
+    #[allow(dead_code)]
     pub fn rcp() -> Vec<Table> {
         let set_pkt = block!(
             assign!("input_traffic_bytes_tmp" => var!("global.input_traffic_bytes")),
@@ -371,6 +380,7 @@ pub mod example_progs {
         return vec![table];
     }
 
+    #[allow(dead_code)]
     pub fn sampling() -> Vec<Table> {
         let set_pkt = block!(
             assign!("count_tmp" => var!("global.count")),
@@ -395,6 +405,7 @@ pub mod example_progs {
         return vec![table];
     }
 
+    #[allow(dead_code)]
     pub fn blue_increase() -> Vec<Table> {
         let set_pkt = block!(
             assign!("last_update_tmp" => var!("global.last_update")),
@@ -419,6 +430,7 @@ pub mod example_progs {
         return vec![table];
     }
 
+    #[allow(dead_code)]
     pub fn flowlet() -> Vec<Table> {
         let set_pkt = block!(
             assign!("saved_hop_tmp" => var!("global.saved_hop")),
@@ -444,6 +456,7 @@ pub mod example_progs {
         return vec![table];
     }
 
+    #[allow(dead_code)]
     pub fn marple_nmo() -> Vec<Table> {
         let set_pkt = block!(
             assign!("count_tmp" => var!("global.count")),
@@ -464,6 +477,7 @@ pub mod example_progs {
         return vec![table];
     }
 
+    #[allow(dead_code)]
     pub fn marple_new_flow() -> Vec<Table> {
         let set_pkt = block!(
             assign!("count_tmp" => var!("global.count")),
@@ -485,6 +499,7 @@ pub mod example_progs {
         return vec![table];
     }
 
+    #[allow(dead_code)]
     pub fn stateful_fw() -> Vec<Table> {
         let set_pkt = block!(
             assign!("established_tmp" => var!("global.established")),
@@ -512,6 +527,7 @@ pub mod example_progs {
         return vec![table];
     }
 
+    #[allow(dead_code)]
     pub fn cetus_waw() -> Vec<Table> {
         let a1 = assign!("meta.b" => add!(var!("meta.c"), Expr::Int(1)));
         let a2 = assign!("meta.b" => Expr::Int(1));

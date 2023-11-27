@@ -26,6 +26,7 @@ pub fn is_integer(v: Var) -> impl Fn(&mut EGraph<Mio, MioAnalysis>, Id, &Subst) 
     }
 }
 
+#[allow(dead_code)]
 pub fn alg_simpl() -> Vec<RW> {
     vec![
         rewrite!("add-sub-convert"; "(+ ?x (neg ?y))" => "(- ?x ?y)"),
@@ -47,6 +48,7 @@ pub fn alg_simpl() -> Vec<RW> {
     ]
 }
 
+#[allow(dead_code)]
 pub fn predicate_rewrites() -> Vec<RW> {
     vec![
         rewrite!("and-elim-left"; "(land ?x false)" => "false"),

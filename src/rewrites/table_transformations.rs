@@ -10,6 +10,7 @@ pub fn seq_elim() -> Vec<RW> {
             "(seq (seq ?t1 ?t2) ?t3)" => "(seq ?t1 (seq ?t2 ?t3))")];
 }
 
+#[allow(dead_code)]
 pub fn waw_elim() -> Vec<RW> {
     struct WAWElimApplier {
         k1: Var,
@@ -24,8 +25,8 @@ pub fn waw_elim() -> Vec<RW> {
             egraph: &mut EGraph<Mio, MioAnalysis>,
             eclass: Id,
             subst: &Subst,
-            searcher_ast: Option<&egg::PatternAst<Mio>>,
-            rule_name: egg::Symbol,
+            _searcher_ast: Option<&egg::PatternAst<Mio>>,
+            _rule_name: egg::Symbol,
         ) -> Vec<Id> {
             let k1s = subst[self.k1];
             let k2s = subst[self.k2];
@@ -107,6 +108,7 @@ pub fn waw_elim() -> Vec<RW> {
     ]
 }
 
+#[allow(dead_code)]
 pub fn parallelize_independent_tables() -> Vec<RW> {
     return vec![
         rewrite!(
@@ -124,6 +126,7 @@ pub fn parallelize_independent_tables() -> Vec<RW> {
     ];
 }
 
+#[allow(dead_code)]
 pub fn comm_independent_tables() -> Vec<RW> {
     return vec![
         rewrite!("comm-tables-adj";
@@ -239,8 +242,8 @@ pub fn lift_ite_compare() -> Vec<RW> {
             egraph: &mut EGraph<Mio, MioAnalysis>,
             eclass: Id,
             subst: &Subst,
-            searcher_ast: Option<&egg::PatternAst<Mio>>,
-            rule_name: egg::Symbol,
+            _searcher_ast: Option<&egg::PatternAst<Mio>>,
+            _rule_name: egg::Symbol,
         ) -> Vec<Id> {
             let kid = subst[self.keys.parse().unwrap()];
             let aid = subst[self.actions.parse().unwrap()];
@@ -379,6 +382,7 @@ pub fn lift_ite_compare() -> Vec<RW> {
     })]
 }
 
+#[allow(dead_code)]
 pub fn lift_nested_ite_cond() -> Vec<RW> {
     struct IteToGIteApplier {
         keys: &'static str,
@@ -390,8 +394,8 @@ pub fn lift_nested_ite_cond() -> Vec<RW> {
             egraph: &mut EGraph<Mio, MioAnalysis>,
             eclass: Id,
             subst: &Subst,
-            searcher_ast: Option<&egg::PatternAst<Mio>>,
-            rule_name: egg::Symbol,
+            _searcher_ast: Option<&egg::PatternAst<Mio>>,
+            _rule_name: egg::Symbol,
         ) -> Vec<Id> {
             let kid = subst[self.keys.parse().unwrap()];
             let aid = subst[self.actions.parse().unwrap()];
@@ -556,6 +560,7 @@ pub fn lift_nested_ite_cond() -> Vec<RW> {
 ///   ?x && ?y, ?x || ?y and !?x
 /// and we remove the assumption of the elaboration
 /// to be stateful
+#[allow(dead_code)]
 pub fn lift_ite_cond() -> Vec<RW> {
     struct LiftIteCondApplier {
         keys: &'static str,
@@ -567,8 +572,8 @@ pub fn lift_ite_cond() -> Vec<RW> {
             egraph: &mut EGraph<Mio, MioAnalysis>,
             eclass: Id,
             subst: &Subst,
-            searcher_ast: Option<&egg::PatternAst<Mio>>,
-            rule_name: egg::Symbol,
+            _searcher_ast: Option<&egg::PatternAst<Mio>>,
+            _rule_name: egg::Symbol,
         ) -> Vec<Id> {
             let k_id = subst[self.keys.parse().unwrap()];
             let a_id = subst[self.actions.parse().unwrap()];

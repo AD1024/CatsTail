@@ -1,5 +1,3 @@
-use std::collections::{HashMap, HashSet};
-
 use egg::{rewrite, Applier, EGraph, Id, Language, Pattern, Rewrite, Searcher, Subst, Var};
 
 use crate::language::{
@@ -22,6 +20,7 @@ fn constains_leaf(v: Var) -> impl Fn(&mut EG, Id, &Subst) -> bool {
     }
 }
 
+#[allow(dead_code)]
 fn none_global(v: Var) -> impl Fn(&mut EG, Id, &Subst) -> bool {
     move |egraph, _id, subst| {
         let eclass = subst[v];
@@ -39,6 +38,7 @@ fn none_global(v: Var) -> impl Fn(&mut EG, Id, &Subst) -> bool {
     }
 }
 
+#[allow(dead_code)]
 fn same_elaboration(v1: Var, v2: Var) -> impl Fn(&mut EG, Id, &Subst) -> bool {
     move |egraph, _id, subst| {
         let eclass1 = subst[v1];
@@ -49,6 +49,7 @@ fn same_elaboration(v1: Var, v2: Var) -> impl Fn(&mut EG, Id, &Subst) -> bool {
     }
 }
 
+#[allow(dead_code)]
 fn same_read(v1: Var, v2: Var) -> impl Fn(&mut EG, Id, &Subst) -> bool {
     move |egraph, _id, subst| {
         let eclass1 = subst[v1];
@@ -208,6 +209,7 @@ fn is_n_depth_mapped(
 
 /// Map (E ?t ?expr) to Alu operators (for ?expr)
 /// will decide whether to map to stateful or stay stateless
+#[allow(dead_code)]
 struct ElaboratorConversion {
     table_id: Var,
     expr: Var,
@@ -228,8 +230,8 @@ impl Applier<Mio, MioAnalysis> for ElaboratorConversion {
         egraph: &mut EGraph<Mio, MioAnalysis>,
         eclass: Id,
         subst: &Subst,
-        searcher_ast: Option<&egg::PatternAst<Mio>>,
-        rule_name: egg::Symbol,
+        _searcher_ast: Option<&egg::PatternAst<Mio>>,
+        _rule_name: egg::Symbol,
     ) -> Vec<Id> {
         // let table_id = subst[self.table_id];
         let expr_id = subst[self.expr];
@@ -309,6 +311,7 @@ impl Applier<Mio, MioAnalysis> for AluApplier {
     }
 }
 
+#[allow(dead_code)]
 pub fn lift_stateless() -> Vec<RW> {
     // If the elaboration of some computation is a global variable,
     // and the computation requires reading that global variable, e.g. global.x = global.x + (meta.y + meta.z)
@@ -321,8 +324,8 @@ pub fn lift_stateless() -> Vec<RW> {
             egraph: &mut egg::EGraph<Mio, MioAnalysis>,
             eclass: Id,
             subst: &Subst,
-            searcher_ast: Option<&egg::PatternAst<Mio>>,
-            rule_name: egg::Symbol,
+            _searcher_ast: Option<&egg::PatternAst<Mio>>,
+            _rule_name: egg::Symbol,
         ) -> Vec<Id> {
             // First check whether in each action there is an elaboration that involves
             // both reading and writing to a global variable

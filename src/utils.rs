@@ -1,10 +1,4 @@
-use std::{
-    cell::{Ref, RefCell},
-    collections::HashMap,
-    fmt::{Display, Formatter},
-    hash::Hash,
-    rc::Rc,
-};
+use std::{collections::HashMap, fmt::Formatter, hash::Hash};
 
 #[derive(Debug, Clone)]
 pub struct RegionedMap<K, V>
@@ -34,6 +28,7 @@ impl std::fmt::Display for RegionedMap<String, String> {
     }
 }
 
+#[allow(dead_code)]
 impl<K: PartialEq + Eq + Hash, V: Clone> RegionedMap<K, V> {
     pub fn new() -> Self {
         Self {
@@ -98,8 +93,9 @@ impl<K: PartialEq + Eq + Hash, V: Clone> RegionedMap<K, V> {
 }
 
 pub mod testing {
-    use std::{path::Path, time::Duration};
+    use std::time::Duration;
 
+    #[allow(dead_code)]
     pub fn run_n_times(n: usize, f: impl Fn() -> Duration, report: &str) -> Duration {
         let mut total = Duration::new(0, 0);
         let mut each = vec![];

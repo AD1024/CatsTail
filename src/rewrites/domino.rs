@@ -57,14 +57,15 @@ pub mod stateless {
     }
 }
 
+#[allow(dead_code)]
 pub mod stateful {
     use std::collections::HashSet;
 
     use egg::{rewrite, Applier, EGraph, Id, Pattern, Searcher, Subst, Var};
 
     use crate::{
-        language::ir::{Constant, Mio, MioAnalysis, MioType},
-        rewrites::{constains_leaf, is_mapped, is_n_depth_mapped, same_read, RW},
+        language::ir::{Mio, MioAnalysis},
+        rewrites::{constains_leaf, is_n_depth_mapped, RW},
     };
 
     fn check_relops(
@@ -456,8 +457,8 @@ pub mod stateful {
                 egraph: &mut EGraph<Mio, MioAnalysis>,
                 eclass: Id,
                 subst: &Subst,
-                searcher_ast: Option<&egg::PatternAst<Mio>>,
-                rule_name: egg::Symbol,
+                _searcher_ast: Option<&egg::PatternAst<Mio>>,
+                _rule_name: egg::Symbol,
             ) -> Vec<Id> {
                 let comp_id = subst[self.comp];
                 if let Ok((_op_name, args)) = MioAnalysis::decompose_alu_ops(egraph, comp_id) {
@@ -499,29 +500,26 @@ pub mod stateful {
 mod test {
     use std::time::Duration;
 
-    use egg::{EGraph, Extractor, Pattern, Runner, Searcher};
+    use egg::{Extractor, Runner};
 
     use crate::{
         extractors::GreedyExtractor,
-        language::{
-            ir::{Mio, MioAnalysis},
-            transforms::tables_to_egraph,
-        },
+        language::transforms::tables_to_egraph,
         p4::p4ir::Table,
         rewrites::{
             alg_simp::{alg_simpl, predicate_rewrites, rel_comp_rewrites},
             domino::stateful::{
                 bool_alu_rewrites, if_else_raw, nested_ifs, pred_raw, stateful_ite_simpl,
             },
-            elaborator_conversion, lift_stateless,
+            elaborator_conversion,
             table_transformations::{
-                lift_ite_compare, lift_ite_cond, lift_nested_ite_cond,
-                parallelize_independent_tables, seq_elim,
+                lift_ite_compare, lift_ite_cond, lift_nested_ite_cond, seq_elim,
             },
         },
         utils::testing::run_n_times,
     };
 
+    #[allow(dead_code)]
     fn test_domino_mapping(prog: Vec<Table>, filename: &'static str) -> Duration {
         let start_time = std::time::Instant::now();
         let (egraph, root) = tables_to_egraph(prog);

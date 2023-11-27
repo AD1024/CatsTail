@@ -2,7 +2,6 @@ use egg;
 
 pub mod ir {
     use std::borrow::BorrowMut;
-    use std::ops;
     use std::{
         collections::{HashMap, HashSet},
         fmt::Display,
@@ -10,9 +9,7 @@ pub mod ir {
         str::FromStr,
     };
 
-    use egg::{
-        define_language, Analysis, AstSize, DidMerge, EGraph, Extractor, Id, Language, RecExpr,
-    };
+    use egg::{define_language, Analysis, AstSize, DidMerge, Extractor, Id, Language, RecExpr};
 
     define_language! {
         pub enum Mio {
@@ -78,6 +75,7 @@ pub mod ir {
         }
     }
 
+    #[allow(dead_code)]
     #[derive(Debug, PartialEq, Eq, Clone)]
     pub enum MioType {
         Bool,
@@ -219,6 +217,7 @@ pub mod ir {
         }
     }
 
+    #[allow(dead_code)]
     #[derive(Debug, Clone, PartialOrd, Ord, Eq, Hash)]
     pub enum Constant {
         Int(i32),
@@ -403,6 +402,7 @@ pub mod ir {
         }
     }
 
+    #[allow(dead_code)]
     impl Constant {
         pub fn as_bool(&self) -> Option<bool> {
             match self {
@@ -435,6 +435,7 @@ pub mod ir {
         }
     }
 
+    #[allow(dead_code)]
     impl MioAnalysis {
         pub fn new(ctx: HashMap<String, Constant>, gamma: HashMap<String, MioType>) -> Self {
             MioAnalysis {
@@ -794,7 +795,7 @@ pub mod ir {
 
         pub fn extract_smallest_expr(egraph: &egg::EGraph<Mio, Self>, id: Id) -> RecExpr<Mio> {
             let cost_fn = AstSize;
-            let mut extractor = Extractor::new(egraph, cost_fn);
+            let extractor = Extractor::new(egraph, cost_fn);
             extractor.find_best(id).1
         }
 
@@ -905,6 +906,7 @@ pub mod ir {
         pub elaborations: HashSet<String>,
     }
 
+    #[allow(dead_code)]
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub enum MioAnalysisData {
         Dataflow(RWAnalysis),
@@ -1475,13 +1477,9 @@ pub mod utils {
 }
 
 pub mod transforms {
-    use std::{
-        collections::{HashMap, HashSet},
-        rc::Rc,
-        thread::current,
-    };
+    use std::collections::{HashMap, HashSet};
 
-    use egg::{Analysis, EGraph, Id, Language, RecExpr};
+    use egg::{EGraph, Id, Language, RecExpr};
 
     use crate::{
         language::ir::MioAnalysisData,
@@ -1752,6 +1750,7 @@ pub mod transforms {
     }
 }
 
+#[allow(dead_code)]
 mod test {
     use std::collections::{HashMap, HashSet};
 

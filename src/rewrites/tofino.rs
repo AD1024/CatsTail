@@ -5,15 +5,13 @@ use crate::language::ir::Mio;
 use super::{is_mapped, RW};
 
 pub mod stateless {
-    use egg::{rewrite, Applier, Language, Pattern, Searcher, Var};
+    use egg::rewrite;
 
-    use crate::{
-        language::ir::{MioAnalysis, MioAnalysisData},
-        rewrites::{is_n_depth_mapped, AluApplier},
-    };
+    use crate::rewrites::AluApplier;
 
     use super::*;
 
+    #[allow(dead_code)]
     pub fn arith_to_alu() -> Vec<RW> {
         vec![
             rewrite!("add-to-alu"; "(+ ?x ?y)" => { AluApplier::new("arith-alu", "alu-add", vec!["?x", "?y"]) }
@@ -56,14 +54,9 @@ pub mod stateless {
 }
 
 pub mod stateful {
-    use std::collections::{HashMap, HashSet};
+    use egg::{rewrite, Applier, Var};
 
-    use egg::{rewrite, Applier, Pattern, Var};
-
-    use crate::{
-        language::ir::{ArithAluOps, MioAnalysis, MioAnalysisData},
-        rewrites::{is_n_depth_mapped, same_elaboration},
-    };
+    use crate::{language::ir::MioAnalysis, rewrites::is_n_depth_mapped};
 
     use super::*;
     pub fn conditional_assignments() -> Vec<RW> {
@@ -94,8 +87,8 @@ pub mod stateful {
                 egraph: &mut egg::EGraph<Mio, MioAnalysis>,
                 eclass: Id,
                 subst: &Subst,
-                searcher_ast: Option<&egg::PatternAst<Mio>>,
-                rule_name: egg::Symbol,
+                _searcher_ast: Option<&egg::PatternAst<Mio>>,
+                _rule_name: egg::Symbol,
             ) -> Vec<Id> {
                 let elaborations = MioAnalysis::elaborations(egraph, eclass).clone();
                 assert!(
@@ -152,13 +145,14 @@ mod test {
         rewrites::{
             alg_simp::rel_comp_rewrites,
             domino::stateless::arith_to_alu,
-            elaborator_conversion, lift_stateless,
-            table_transformations::{lift_ite_compare, seq_elim, waw_elim},
+            elaborator_conversion,
+            table_transformations::{lift_ite_compare, seq_elim},
             tofino::{stateful::conditional_assignments, stateless::cmp_to_rel},
         },
         utils::testing::run_n_times,
     };
 
+    #[allow(dead_code)]
     fn test_tofino_mapping(prog: Vec<Table>, filename: &'static str) -> Duration {
         let start_time = std::time::Instant::now();
         let (egraph, root) = tables_to_egraph(prog);
