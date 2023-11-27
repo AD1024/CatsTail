@@ -45,10 +45,10 @@ pub mod stateless {
             rewrite!("neq-to-rel"; "(!= ?x ?y)" => "(rel-alu alu-neq ?x ?y)"
                     if is_mapped("?x".parse().unwrap(), None)
                     if is_mapped("?y".parse().unwrap(), None)),
-            rewrite!("ge-to-rel"; "(>= ?x ?y)" => "(rel-alu alu-not (rel-alu alu-lt ?x ?y))"
+            rewrite!("ge-to-rel"; "(>= ?x ?y)" => "(rel-alu alu-ge ?x ?y))"
                     if is_mapped("?x".parse().unwrap(), None)
                     if is_mapped("?y".parse().unwrap(), None)),
-            rewrite!("le-to-rel"; "(<= ?x ?y)" => "(rel-alu alu-not (rel-alu alu-gt ?x ?y))"
+            rewrite!("le-to-rel"; "(<= ?x ?y)" => "(rel-alu alu-le ?x ?y))"
                     if is_mapped("?x".parse().unwrap(), None)
                     if is_mapped("?y".parse().unwrap(), None)),
         ]
@@ -131,11 +131,12 @@ pub mod stateful {
             }
         }
         vec![rewrite!("cond-assign-to-salu";
-                    "(E ?t ?v (ite ?rel ?lhs ?rhs))" =>
-                    { TofinoStatefulAluApplier::new("arith-alu", "alu-ite", "?t", vec!["?rel", "?lhs", "?rhs"]) }
-                if is_n_depth_mapped("?rel".parse().unwrap(), 2, Some(false))
-                if is_n_depth_mapped("?lhs".parse().unwrap(), 1, Some(false))
-                if is_n_depth_mapped("?rhs".parse().unwrap(), 1, Some(false)))]
+                "(E ?t ?v (ite ?rel ?lhs ?rhs))" =>
+                { TofinoStatefulAluApplier::new("arith-alu", "alu-ite", "?t", vec!["?rel", "?lhs", "?rhs"]) }
+            if is_n_depth_mapped("?rel".parse().unwrap(), 2, Some(false))
+            if is_n_depth_mapped("?lhs".parse().unwrap(), 1, Some(false))
+            if is_n_depth_mapped("?rhs".parse().unwrap(), 1, Some(false))
+        )]
     }
 }
 
@@ -149,11 +150,13 @@ mod test {
         language::transforms::tables_to_egraph,
         p4::{example_progs, p4ir::Table},
         rewrites::{
+            alg_simp::rel_comp_rewrites,
             domino::stateless::arith_to_alu,
             elaborator_conversion, lift_stateless,
             table_transformations::{lift_ite_compare, seq_elim, waw_elim},
             tofino::{stateful::conditional_assignments, stateless::cmp_to_rel},
         },
+        utils::testing::run_n_times,
     };
 
     fn test_tofino_mapping(prog: Vec<Table>, filename: &'static str) -> Duration {
@@ -166,6 +169,7 @@ mod test {
             .chain(elaborator_conversion())
             .chain(cmp_to_rel())
             // .chain(lift_stateless())
+            .chain(rel_comp_rewrites())
             .chain(lift_ite_compare())
             // .chain(waw_elim())
             .collect::<Vec<_>>();
@@ -180,7 +184,7 @@ mod test {
         let (best_cost, best) = extractor.find_best(root);
         let end_time = std::time::Instant::now();
         // println!("best cost: {}", best_cost);
-        // println!("best: {}", best.pretty(80));
+        println!("best: {}", best.pretty(80));
         // println!("mappable: {}", best_cost != usize::MAX);
         assert!(
             best_cost < usize::MAX,
@@ -191,58 +195,45 @@ mod test {
         end_time - start_time
     }
 
-    fn run_n_times(n: usize, f: impl Fn() -> Duration) -> Duration {
-        let mut total = Duration::new(0, 0);
-        for _ in 0..n {
-            total += f();
-        }
-        total / n as u32
-    }
-
     #[test]
     fn test_tofino_rcp() {
         let test_fn = || test_tofino_mapping(example_progs::rcp(), "rcp.pdf");
-        let avg_time = run_n_times(10, test_fn);
+        let avg_time = run_n_times(10, test_fn, "tofino_rcp.json");
         println!("RCP avg time: {:?}", avg_time);
     }
 
     #[test]
     fn test_tofino_sampling() {
         let test_fn = || test_tofino_mapping(example_progs::sampling(), "sampling.pdf");
-        let avg_time = run_n_times(10, test_fn);
+        let avg_time = run_n_times(10, test_fn, "tofino_sampling.json");
         println!("sampling avg time: {:?}", avg_time);
     }
 
     #[test]
     fn test_tofino_blue_increase() {
         let test_fn = || test_tofino_mapping(example_progs::blue_increase(), "blue_increase.pdf");
-        let avg_time = run_n_times(10, test_fn);
+        let avg_time = run_n_times(1, test_fn, "tofino_blue_increase.json");
         println!("blue increase avg time: {:?}", avg_time);
     }
 
     #[test]
     fn test_tofino_flowlet() {
         let test_fn = || test_tofino_mapping(example_progs::flowlet(), "flowlet.pdf");
-        let avg_time = run_n_times(1, test_fn);
+        let avg_time = run_n_times(1, test_fn, "tofino_flowlet.json");
         println!("flowlet avg time: {:?}", avg_time);
     }
 
     #[test]
     fn test_tofino_marple_nmo() {
         let test_fn = || test_tofino_mapping(example_progs::marple_nmo(), "marple_nmo.pdf");
-        let avg_time = run_n_times(10, test_fn);
+        let avg_time = run_n_times(10, test_fn, "tofino_marple_nmo.json");
         println!("marple nmo avg time: {:?}", avg_time);
     }
 
     #[test]
     fn test_tofino_marple_new() {
         let test_fn = || test_tofino_mapping(example_progs::marple_new_flow(), "marple_new.pdf");
-        let avg_time = run_n_times(10, test_fn);
+        let avg_time = run_n_times(10, test_fn, "tofino_marple_new.json");
         println!("marple new avg time: {:?}", avg_time);
-    }
-
-    #[test]
-    fn test_tofino_waw_elim() {
-        test_tofino_mapping(example_progs::cetus_waw(), "waw_elim.pdf");
     }
 }

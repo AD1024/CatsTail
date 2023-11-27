@@ -1559,7 +1559,6 @@ pub mod transforms {
                 }
             }
             Stmt::Read(x, y) => {
-                // let val = built.get(x).unwrap();
                 let lhs = recexpr.add(Mio::Symbol(x.clone()));
                 let rhs = recexpr.add(Mio::Symbol(y.clone()));
                 recexpr.add(Mio::Read([lhs, rhs]));
@@ -1581,9 +1580,10 @@ pub mod transforms {
             }
             Stmt::If(cond, ib, eb) => {
                 let mut current = built.clone();
-                let parent = Rc::new(built);
-                let ib_built = RegionedMap::new(Some(parent.clone()));
-                let eb_built = RegionedMap::new(Some(parent));
+                let mut ib_built = built.clone();
+                ib_built.push();
+                let mut eb_built = built.clone();
+                eb_built.push();
                 let ib_built = walk_stmt(ib, ib_built, cond, recexpr, reads, writes);
                 let mut eb_built = walk_stmt(
                     eb,
@@ -1637,7 +1637,7 @@ pub mod transforms {
                     }
                 }
                 for eb_k in eb_built.keys() {
-                    if ib_built.contains_key(eb_k) {
+                    if ib_built.contains_key_local(eb_k) {
                         continue;
                     }
                     let eb_v = eb_built.get(eb_k).unwrap().clone();

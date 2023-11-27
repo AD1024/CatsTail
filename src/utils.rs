@@ -1,6 +1,7 @@
 use std::{
     cell::{Ref, RefCell},
     collections::HashMap,
+    fmt::{Display, Formatter},
     hash::Hash,
     rc::Rc,
 };
@@ -11,81 +12,119 @@ where
     K: PartialEq + Eq + Hash,
     V: Clone,
 {
-    parent: Option<Rc<RegionedMap<K, V>>>,
-    map: HashMap<K, V>,
+    maps: Vec<HashMap<K, V>>,
 }
 
-impl<K: PartialEq + Eq + Hash, V: Clone, const N: usize> From<[(K, V); N]> for RegionedMap<K, V> {
-    fn from(arr: [(K, V); N]) -> Self {
-        let mut map = HashMap::new();
-        for (k, v) in arr.into_iter() {
-            map.insert(k, v);
-        }
-        Self { parent: None, map }
+impl<K, V> Default for RegionedMap<K, V>
+where
+    K: PartialEq + Eq + Hash,
+    V: Clone,
+{
+    fn default() -> Self {
+        Self::new()
     }
 }
 
-impl<K: PartialEq + Eq + Hash, V: Clone> Default for RegionedMap<K, V> {
-    fn default() -> Self {
-        Self {
-            parent: None,
-            map: HashMap::new(),
+impl std::fmt::Display for RegionedMap<String, String> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        for (key, value) in self.maps.last().unwrap().iter() {
+            writeln!(f, "{}: {}", key, value)?;
         }
+        Ok(())
     }
 }
 
 impl<K: PartialEq + Eq + Hash, V: Clone> RegionedMap<K, V> {
-    pub fn new(parent: Option<Rc<RegionedMap<K, V>>>) -> Self {
+    pub fn new() -> Self {
         Self {
-            parent,
-            map: HashMap::new(),
+            maps: vec![HashMap::new()],
         }
     }
 
+    pub fn push(&mut self) {
+        self.maps.push(HashMap::new());
+    }
+
+    pub fn pop(&mut self) -> Option<HashMap<K, V>> {
+        self.maps.pop()
+    }
+
     pub fn insert(&mut self, key: K, value: V) {
-        self.map.insert(key, value);
-    }
-
-    pub fn contains_key_local(&self, key: &K) -> bool {
-        self.map.contains_key(key)
-    }
-
-    pub fn contains_key(&self, key: &K) -> bool {
-        self.map.contains_key(key)
-            || match &self.parent {
-                Some(parent) => parent.contains_key(key),
-                None => false,
-            }
-    }
-
-    pub fn get_local(&self, key: &K) -> Option<&V> {
-        self.map.get(key)
+        self.maps.last_mut().unwrap().insert(key, value);
     }
 
     pub fn get(&self, key: &K) -> Option<&V> {
-        self.map.get(key).or_else(|| match &self.parent {
-            Some(parent) => parent.get(key),
-            None => None,
-        })
+        for map in self.maps.iter().rev() {
+            if let Some(value) = map.get(key) {
+                return Some(value);
+            }
+        }
+        None
     }
 
-    pub fn keys(&self) -> Vec<&K> {
-        return self.map.keys().collect();
+    pub fn contains_key(&self, key: &K) -> bool {
+        for map in self.maps.iter().rev() {
+            if map.contains_key(key) {
+                return true;
+            }
+        }
+        false
     }
 
-    pub fn values(&self) -> Vec<&V> {
-        return self.map.values().collect();
+    pub fn contains_key_local(&self, key: &K) -> bool {
+        self.maps.last().unwrap().contains_key(key)
+    }
+
+    pub fn get_local(&self, key: &K) -> Option<&V> {
+        self.maps.last().unwrap().get(key)
+    }
+
+    pub fn keys(&self) -> impl Iterator<Item = &K> {
+        self.maps.last().unwrap().keys()
     }
 
     pub fn remove(&mut self, key: &K) -> Option<V> {
-        return self.map.remove(key);
+        for map in self.maps.iter_mut().rev() {
+            if let Some(value) = map.remove(key) {
+                return Some(value);
+            }
+        }
+        None
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
-        return self.map.iter();
+        self.maps.last().unwrap().iter()
     }
+}
 
-    pub fn parent(&self) -> Option<Rc<RegionedMap<K, V>>> {
-        self.parent.clone()
+pub mod testing {
+    use std::{path::Path, time::Duration};
+
+    pub fn run_n_times(n: usize, f: impl Fn() -> Duration, report: &str) -> Duration {
+        let mut total = Duration::new(0, 0);
+        let mut each = vec![];
+        for _ in 0..n {
+            let time = f();
+            total += time;
+            each.push(time);
+        }
+        let avg_time = total / n as u32;
+        let std_dev = {
+            let mut sum = 0.0;
+            for time in each.into_iter() {
+                sum += ((time.as_secs_f64() - avg_time.as_secs_f64()) * 1000.0).powf(2.0);
+            }
+            (sum as f64 / n as f64).sqrt()
+        };
+        std::fs::write(
+            report,
+            format!(
+                "{{\"avg_time\": {}, \"std\": {}}}",
+                avg_time.as_secs_f64() * 1000.0,
+                std_dev
+            ),
+        )
+        .unwrap();
+        avg_time
     }
 }

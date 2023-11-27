@@ -81,6 +81,7 @@ pub fn rel_comp_rewrites() -> Vec<RW> {
         rewrite!("not-eq-neq"; "(!= ?x ?y)" => "(lnot (= ?x ?y))"),
         rewrite!("neq-not-eq"; "(lnot (= ?x ?y))" => "(!= ?x ?y)"),
         rewrite!("not-neq-neg"; "(lnot (!= ?x ?y))" => "(= ?x ?y)"),
+        rewrite!("not-lt-ge"; "(lnot (< ?x ?y))" => "(>= ?x ?y)"),
         rewrite!("gt-lt"; "(> ?x ?y)" => "(< ?y ?x)"),
         rewrite!("lt-gt"; "(< ?x ?y)" => "(> ?y ?x)"),
         rewrite!("lt-comp-lt-0"; "(< ?x ?y)" => "(< (- ?x ?y) 0)"),

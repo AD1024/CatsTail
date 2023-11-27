@@ -519,9 +519,10 @@ mod test {
                 parallelize_independent_tables, seq_elim,
             },
         },
+        utils::testing::run_n_times,
     };
 
-    fn test_domino_mapping(prog: Vec<Table>, filename: &'static str) {
+    fn test_domino_mapping(prog: Vec<Table>, filename: &'static str) -> Duration {
         let start_time = std::time::Instant::now();
         let (egraph, root) = tables_to_egraph(prog);
         let rewrites = seq_elim()
@@ -557,46 +558,67 @@ mod test {
             best.pretty(80)
         );
         println!("time: {:?}", end_time - start_time);
+        end_time - start_time
     }
 
     #[test]
     fn test_stateful_fw() {
-        test_domino_mapping(crate::p4::example_progs::stateful_fw(), "stateful_fw.pdf");
+        let run_fn =
+            || test_domino_mapping(crate::p4::example_progs::stateful_fw(), "stateful_fw.pdf");
+        let avg_time = run_n_times(10, run_fn, "domino_stateful_fw.json");
+        println!("stateful fw avg time: {:?}", avg_time);
     }
 
     #[test]
     fn test_blue_increase() {
-        test_domino_mapping(
-            crate::p4::example_progs::blue_increase(),
-            "blue_increase.pdf",
-        );
+        let run_fn = || {
+            test_domino_mapping(
+                crate::p4::example_progs::blue_increase(),
+                "blue_increase.pdf",
+            )
+        };
+        let avg_time = run_n_times(10, run_fn, "domino_blue_increase.json");
+        println!("blue increase avg time: {:?}", avg_time);
     }
 
     #[test]
     fn test_domino_rcp() {
-        test_domino_mapping(crate::p4::example_progs::rcp(), "rcp.pdf");
+        let run_fn = || test_domino_mapping(crate::p4::example_progs::rcp(), "rcp.pdf");
+        let avg_time = run_n_times(10, run_fn, "domino_rcp.json");
+        println!("RCP avg time: {:?}", avg_time);
     }
 
     #[test]
     fn test_domino_sampling() {
-        test_domino_mapping(crate::p4::example_progs::sampling(), "rcp.pdf");
+        let run_fn = || test_domino_mapping(crate::p4::example_progs::sampling(), "rcp.pdf");
+        let avg_time = run_n_times(10, run_fn, "domino_sampling.json");
+        println!("sampling avg time: {:?}", avg_time);
     }
 
     #[test]
     fn test_domino_marple_flow_new() {
-        test_domino_mapping(
-            crate::p4::example_progs::marple_new_flow(),
-            "marple_new_flow.pdf",
-        );
+        let run_fn = || {
+            test_domino_mapping(
+                crate::p4::example_progs::marple_new_flow(),
+                "marple_new_flow.pdf",
+            )
+        };
+        let avg_time = run_n_times(10, run_fn, "domino_marple_new_flow.json");
+        println!("marple new flow avg time: {:?}", avg_time);
     }
 
     #[test]
     fn test_domino_marple_nmo() {
-        test_domino_mapping(crate::p4::example_progs::marple_nmo(), "marple_nmo.pdf");
+        let run_fn =
+            || test_domino_mapping(crate::p4::example_progs::marple_nmo(), "marple_nmo.pdf");
+        let avg_time = run_n_times(10, run_fn, "domino_marple_nmo.json");
+        println!("marple nmo avg time: {:?}", avg_time);
     }
 
     #[test]
     fn test_domino_flowlet() {
-        test_domino_mapping(crate::p4::example_progs::flowlet(), "flowlet.pdf");
+        let run_fn = || test_domino_mapping(crate::p4::example_progs::flowlet(), "flowlet.pdf");
+        let avg_time = run_n_times(10, run_fn, "domino_flowlet.json");
+        println!("flowlet avg time: {:?}", avg_time);
     }
 }
