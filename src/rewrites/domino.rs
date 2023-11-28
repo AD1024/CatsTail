@@ -595,18 +595,13 @@ mod test {
                 &rw,
             )
         };
-        let avg_time = run_n_times(1, run_fn, "domino_stateful_fw.json");
+        let avg_time = run_n_times(10, run_fn, "domino_stateful_fw.json");
         println!("stateful fw avg time: {:?}", avg_time);
     }
 
     #[test]
     fn test_blue_increase() {
-        let rw = prelude()
-            .into_iter()
-            .chain(if_else_raw())
-            .chain(lift_ite_cond())
-            .chain(pred_raw())
-            .collect();
+        let rw = prelude().into_iter().chain(if_else_raw()).collect();
         let run_fn = || {
             test_domino_mapping(
                 crate::p4::example_progs::blue_increase(),
@@ -614,7 +609,7 @@ mod test {
                 &rw,
             )
         };
-        let avg_time = run_n_times(1, run_fn, "domino_blue_increase.json");
+        let avg_time = run_n_times(10, run_fn, "domino_blue_increase.json");
         println!("blue increase avg time: {:?}", avg_time);
     }
 
@@ -668,7 +663,7 @@ mod test {
                 &rw,
             )
         };
-        let avg_time = run_n_times(1, run_fn, "domino_marple_nmo.json");
+        let avg_time = run_n_times(10, run_fn, "domino_marple_nmo.json");
         println!("marple nmo avg time: {:?}", avg_time);
     }
 
@@ -683,7 +678,7 @@ mod test {
             .collect();
         let run_fn =
             || test_domino_mapping(crate::p4::example_progs::flowlet(), "flowlet.pdf", &rw);
-        let avg_time = run_n_times(1, run_fn, "domino_flowlet.json");
+        let avg_time = run_n_times(10, run_fn, "domino_flowlet.json");
         println!("flowlet avg time: {:?}", avg_time);
     }
 }
