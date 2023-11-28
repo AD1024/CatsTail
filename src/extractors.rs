@@ -74,13 +74,13 @@ impl<'a> CostFunction<Mio> for GreedyExtractor<'a> {
             Mio::Actions(_) => 1,
             Mio::Elaborations(_) => 0,
             Mio::Elaborate([_, v, e]) => {
-                if MioAnalysis::stateful_reads(self.egraph, *e)
-                    .union(&MioAnalysis::stateful_reads(self.egraph, *v))
-                    .count()
-                    > self.stateful_reg_per_alu
-                {
-                    return usize::MAX;
-                }
+                // if MioAnalysis::stateful_reads(self.egraph, *e)
+                //     .union(&MioAnalysis::stateful_reads(self.egraph, *v))
+                //     .count()
+                //     > self.stateful_reg_per_alu
+                // {
+                //     return usize::MAX;
+                // }
                 // println!("{:?} <== {:?}", self.egraph[*v].nodes, MioAnalysis::has_stateful_reads(self.egraph, *e));
                 if MioAnalysis::has_stateful_reads(self.egraph, *v)
                     || MioAnalysis::has_stateful_reads(self.egraph, *e)
