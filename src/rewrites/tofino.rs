@@ -206,14 +206,14 @@ mod test {
     #[test]
     fn test_tofino_blue_increase() {
         let test_fn = || test_tofino_mapping(example_progs::blue_increase(), "blue_increase.pdf");
-        let avg_time = run_n_times(1, test_fn, "tofino_blue_increase.json");
+        let avg_time = run_n_times(10, test_fn, "tofino_blue_increase.json");
         println!("blue increase avg time: {:?}", avg_time);
     }
 
     #[test]
     fn test_tofino_flowlet() {
         let test_fn = || test_tofino_mapping(example_progs::flowlet(), "flowlet.pdf");
-        let avg_time = run_n_times(1, test_fn, "tofino_flowlet.json");
+        let avg_time = run_n_times(10, test_fn, "tofino_flowlet.json");
         println!("flowlet avg time: {:?}", avg_time);
     }
 

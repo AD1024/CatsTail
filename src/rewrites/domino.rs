@@ -549,7 +549,7 @@ mod test {
         let (best_cost, best) = extractor.find_best(root);
         let end_time = std::time::Instant::now();
         // println!("best cost: {}", best_cost);
-        // println!("best: {}", best.pretty(80));
+        println!("best: {}", best.pretty(80));
         assert!(
             best_cost < usize::MAX,
             "Cannot map the following program:\n{}",
