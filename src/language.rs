@@ -567,6 +567,7 @@ pub mod ir {
             checked_type: MioType,
             constant: Option<Constant>,
             elaborations: HashSet<String>,
+            min_depth: usize,
         ) -> MioAnalysisData {
             MioAnalysisData::Action(ActionAnalysis {
                 reads,
@@ -574,6 +575,7 @@ pub mod ir {
                 constant,
                 elaborations,
                 checked_type,
+                min_depth,
             })
         }
 
@@ -600,6 +602,13 @@ pub mod ir {
             match &egraph[id].data {
                 MioAnalysisData::Action(u) => u.checked_type.clone(),
                 _ => panic!("Dataflow {:?} has no type", id),
+            }
+        }
+
+        pub fn min_depth(egraph: &egg::EGraph<Mio, Self>, id: Id) -> usize {
+            match &egraph[id].data {
+                MioAnalysisData::Action(u) => u.min_depth,
+                _ => panic!("Dataflow {:?} has no min depth", id),
             }
         }
 
@@ -904,6 +913,7 @@ pub mod ir {
         pub checked_type: MioType,
         pub constant: Option<Constant>,
         pub elaborations: HashSet<String>,
+        pub min_depth: usize,
     }
 
     #[allow(dead_code)]
@@ -927,10 +937,7 @@ pub mod ir {
                     egraph.add(Mio::ArithAluOps(ArithAluOps::LocalSymbol))
                 };
                 let sym_node = egraph.add(Mio::ArithAlu(vec![alu_symbol, id]));
-                let f = egraph.union(id, sym_node);
-                if f {
-                    egraph.rebuild();
-                }
+                egraph.union(id, sym_node);
             }
             if let MioAnalysisData::Action(ActionAnalysis {
                 constant: Some(constant),
@@ -942,11 +949,8 @@ pub mod ir {
                 let new_id = egraph.add(Mio::Constant(constant.clone()));
                 let const_op = egraph.add(Mio::ArithAluOps(ArithAluOps::Const));
                 let alu_const = egraph.add(Mio::ArithAlu(vec![const_op, new_id]));
-                let f = egraph.union(id, new_id);
-                let f = egraph.union(id, alu_const) || f;
-                if f {
-                    egraph.rebuild();
-                }
+                egraph.union(id, new_id);
+                egraph.union(id, alu_const);
                 let rt = egraph.find(id);
                 egraph[rt].data = MioAnalysis::new_action_data(
                     HashSet::new(),
@@ -954,6 +958,7 @@ pub mod ir {
                     checked_type.clone(),
                     Some(constant.clone()),
                     elaborations.clone(),
+                    0,
                 )
             }
         }
@@ -999,6 +1004,7 @@ pub mod ir {
                     ty,
                     u1.constant.clone().or(u2.constant.clone()),
                     u1.elaborations.union(&u2.elaborations).cloned().collect(),
+                    u1.min_depth.min(u2.min_depth),
                 );
                 let a_merged = merged != *a;
                 let b_merged = merged != b;
@@ -1017,6 +1023,7 @@ pub mod ir {
                         MioAnalysis::get_type(egraph, *e),
                         MioAnalysis::get_constant(egraph, *e),
                         MioAnalysis::read_set(egraph, *v).clone(),
+                        MioAnalysis::min_depth(egraph, *e),
                     );
                 }
                 Mio::NoOp => MioAnalysisData::Dataflow(Default::default()),
@@ -1031,6 +1038,7 @@ pub mod ir {
                         v_data.checked_type.clone(),
                         v_data.constant.clone(),
                         HashSet::new(),
+                        v_data.min_depth,
                     )
                 }
                 // the || operator
@@ -1074,7 +1082,9 @@ pub mod ir {
                             .chain(Self::write_set(egraph, *rb).iter())
                             .cloned(),
                     );
-
+                    let depth = Self::min_depth(egraph, *cond)
+                        .max(Self::min_depth(egraph, *lb))
+                        .max(Self::min_depth(egraph, *rb));
                     MioAnalysis::new_action_data(
                         reads,
                         writes,
@@ -1084,6 +1094,7 @@ pub mod ir {
                         ),
                         None,
                         HashSet::new(),
+                        depth + 1,
                     )
                 }
                 Mio::Write([field, value]) => {
@@ -1097,23 +1108,32 @@ pub mod ir {
                             v.checked_type.clone(),
                             v.constant.clone(),
                             elaboration,
+                            v.min_depth,
                         );
                     }
                     panic!("Write operator takes a field and an update");
                 }
-                Mio::Keys(keys) => MioAnalysis::new_action_data(
-                    keys.iter()
-                        .map(|k| match &egraph[*k].data {
-                            MioAnalysisData::Action(u) => u.reads.clone(),
-                            _ => panic!("Key entries cannot be control nodes"),
-                        })
-                        .reduce(|x, y| x.union(&y).map(|x| x.into()).collect())
-                        .unwrap_or_default(),
-                    HashSet::new(),
-                    MioType::Unknown,
-                    None,
-                    HashSet::new(),
-                ),
+                Mio::Keys(keys) => {
+                    let depth = keys
+                        .iter()
+                        .map(|k| Self::min_depth(egraph, *k))
+                        .max()
+                        .unwrap();
+                    MioAnalysis::new_action_data(
+                        keys.iter()
+                            .map(|k| match &egraph[*k].data {
+                                MioAnalysisData::Action(u) => u.reads.clone(),
+                                _ => panic!("Key entries cannot be control nodes"),
+                            })
+                            .reduce(|x, y| x.union(&y).map(|x| x.into()).collect())
+                            .unwrap_or_default(),
+                        HashSet::new(),
+                        MioType::Unknown,
+                        None,
+                        HashSet::new(),
+                        depth,
+                    )
+                }
                 Mio::Elaborations(actions)
                 | Mio::ArithAlu(actions)
                 | Mio::RelAlu(actions)
@@ -1123,6 +1143,7 @@ pub mod ir {
                     let mut reads = HashSet::new();
                     let mut writes = HashSet::new();
                     let mut elaborations = HashSet::new();
+                    let mut depth = 0;
                     for u in actions.iter().map(|id| &egraph[*id].data) {
                         match u {
                             MioAnalysisData::Action(u) => {
@@ -1131,6 +1152,7 @@ pub mod ir {
                                     elaborations.union(&u.elaborations).cloned().collect();
                                 // Write set of elaborations should be elaborated fields from the underlying elaborators
                                 writes = elaborations.clone();
+                                depth = depth.max(u.min_depth);
                             }
                             MioAnalysisData::Empty => (),
                             _ => {
@@ -1144,6 +1166,7 @@ pub mod ir {
                         MioType::Unknown,
                         None,
                         elaborations,
+                        depth + 1,
                     )
                 }
                 Mio::GIte(params) => {
@@ -1168,23 +1191,27 @@ pub mod ir {
                 Mio::BitNot(x) | Mio::Neg(x) => {
                     let _ = Self::type_unification(&Self::get_type(egraph, *x), &MioType::Int);
                     let constant = Self::eval_unop(enode, Self::get_constant(egraph, *x));
+                    let depth = Self::min_depth(egraph, *x);
                     Self::new_action_data(
                         Self::read_set(egraph, *x).clone(),
                         Self::write_set(egraph, *x).clone(),
                         Self::get_type(egraph, *x),
                         constant,
                         HashSet::new(),
+                        depth + 1,
                     )
                 }
                 Mio::LNot(x) => {
                     let _ = Self::type_unification(&Self::get_type(egraph, *x), &MioType::Bool);
                     let constant = Self::eval_unop(enode, Self::get_constant(egraph, *x));
+                    let depth = Self::min_depth(egraph, *x);
                     Self::new_action_data(
                         Self::read_set(egraph, *x).clone(),
                         Self::write_set(egraph, *x).clone(),
                         Self::get_type(egraph, *x),
                         constant,
                         HashSet::new(),
+                        depth + 1,
                     )
                 }
                 Mio::Add([a, b])
@@ -1217,6 +1244,7 @@ pub mod ir {
                         Self::get_constant(egraph, *a),
                         Self::get_constant(egraph, *b),
                     );
+                    let depth = Self::min_depth(egraph, *a).max(Self::min_depth(egraph, *b)) + 1;
                     Self::new_action_data(
                         reads,
                         writes
@@ -1231,6 +1259,7 @@ pub mod ir {
                         ret_type,
                         constant,
                         HashSet::new(),
+                        depth,
                     )
                 }
                 Mio::LAnd([a, b]) | Mio::LOr([a, b]) | Mio::LXor([a, b]) => {
@@ -1256,7 +1285,8 @@ pub mod ir {
                         .cloned()
                         .collect();
                     let writes = writes.union(&elaborations).cloned().collect();
-                    Self::new_action_data(reads, writes, ret_type, constant, elaborations)
+                    let depth = Self::min_depth(egraph, *a).max(Self::min_depth(egraph, *b)) + 1;
+                    Self::new_action_data(reads, writes, ret_type, constant, elaborations, depth)
                 }
                 Mio::Eq([a, b])
                 | Mio::Lt([a, b])
@@ -1281,6 +1311,7 @@ pub mod ir {
                         Self::get_constant(egraph, *a),
                         Self::get_constant(egraph, *b),
                     );
+                    let depth = Self::min_depth(egraph, *a).max(Self::min_depth(egraph, *b)) + 1;
                     Self::new_action_data(
                         reads,
                         writes
@@ -1295,6 +1326,7 @@ pub mod ir {
                         MioType::Bool,
                         constant,
                         HashSet::new(),
+                        depth,
                     )
                 }
                 Mio::ArithAluOps(_) | Mio::RelAluOps(_) | Mio::BoolAluOps(_) => {
@@ -1304,6 +1336,7 @@ pub mod ir {
                         MioType::Unknown,
                         None,
                         HashSet::new(),
+                        0,
                     )
                 }
                 Mio::Read([field, pre_state]) => Self::new_action_data(
@@ -1312,6 +1345,7 @@ pub mod ir {
                     Self::get_type(egraph, *field),
                     Self::get_constant(egraph, *field),
                     HashSet::new(),
+                    Self::min_depth(egraph, *field),
                 ),
                 Mio::Constant(c) => {
                     let ty = match c {
@@ -1325,6 +1359,7 @@ pub mod ir {
                         ty,
                         Some(c.clone()),
                         HashSet::new(),
+                        0,
                     )
                 }
                 Mio::Symbol(sym) => Self::new_action_data(
@@ -1345,6 +1380,7 @@ pub mod ir {
                     },
                     egraph.analysis.context.get(sym).cloned(),
                     HashSet::new(),
+                    0,
                 ),
             }
         }
