@@ -169,7 +169,7 @@ fn compute_lift_cond(
                     // we can lift lhs or rhs to some new phv field
                     // if it only involves with 1 stateful read
                     if MioAnalysis::stateful_read_count(egraph, lhs)
-                        == 1
+                        == 1 || MioAnalysis::min_depth(egraph, lhs) > 0
                     {
                         // if the computation depends on some global variables
                         // that is also required by lhs or rhs, then we cannot
@@ -194,7 +194,7 @@ fn compute_lift_cond(
                         )
                     } else if MioAnalysis::stateful_read_count(
                         egraph, rhs,
-                    ) == 1
+                    ) == 1 || MioAnalysis::min_depth(egraph, lhs) > 0
                     {
                         if MioAnalysis::stateful_reads(egraph, rhs)
                             .intersection(&compute_rd)

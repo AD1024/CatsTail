@@ -124,86 +124,54 @@ fn is_n_depth_mapped(
     n: usize,
     stateful: Option<bool>,
 ) -> impl Fn(&mut EG, Id, &Subst) -> bool {
-    fn check_level(egraph: &EG, id: Id, level: usize, stateful: Option<bool>) -> bool {
-        for node in egraph[id].nodes.iter() {
-            if let Some(stateful) = stateful {
-                if stateful {
-                    if match node {
-                        Mio::SAlu(children) => children
-                            .iter()
-                            .all(|c| egraph[*c].nodes.iter().any(|n| n.is_leaf())),
-                        Mio::Symbol(_) => true,
-                        _ => false,
-                    } {
-                        return true;
-                    }
-                } else {
-                    if match node {
-                        Mio::RelAlu(children) | Mio::ArithAlu(children) => children
-                            .iter()
-                            .all(|c| egraph[*c].nodes.iter().any(|n| n.is_leaf())),
-                        Mio::Symbol(_) => true,
-                        _ => false,
-                    } {
-                        return true;
-                    }
-                }
-            } else {
-                if match node {
-                    Mio::RelAlu(children) | Mio::SAlu(children) | Mio::ArithAlu(children) => {
-                        children
-                            .iter()
-                            .all(|c| egraph[*c].nodes.iter().any(|n| n.is_leaf()))
-                    }
-                    Mio::Symbol(_) => true,
-                    _ => false,
-                } {
-                    return true;
-                }
-            }
-        }
-        if level == 0 {
-            return false;
-        }
-        for node in egraph[id].nodes.iter() {
-            if let Some(stateful_b) = stateful {
-                if stateful_b {
-                    if match node {
-                        Mio::SAlu(children) => children
-                            .iter()
-                            .any(|c| check_level(egraph, *c, level - 1, stateful)),
-                        _ => false,
-                    } {
-                        return true;
-                    }
-                } else {
-                    if match node {
-                        Mio::RelAlu(children) | Mio::ArithAlu(children) => children
-                            .iter()
-                            .any(|c| check_level(egraph, *c, level - 1, stateful)),
-                        _ => false,
-                    } {
-                        return true;
-                    }
-                }
-            } else {
-                if match node {
-                    Mio::RelAlu(children) | Mio::SAlu(children) | Mio::ArithAlu(children) => {
-                        children
-                            .iter()
-                            .any(|c| check_level(egraph, *c, level - 1, stateful))
-                    }
-                    _ => false,
-                } {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
     move |egraph, _id, subst| {
         let eclass = subst[v];
-        return check_level(egraph, eclass, n, stateful);
+        // return check_level(egraph, eclass, n, stateful);
+        if MioAnalysis::min_depth(egraph, eclass) == 0 {
+            return true;
+        }
+        let check_depth = |children: &Vec<Id>| {
+            children
+                .iter()
+                .map(|c| MioAnalysis::min_depth(egraph, *c))
+                .max()
+                .unwrap_or(0)
+                + 1
+                <= n
+        };
+        if let Some(stateful) = stateful {
+            if stateful {
+                for node in egraph[eclass].nodes.iter() {
+                    match node {
+                        Mio::SAlu(children) => {
+                            return check_depth(children);
+                        }
+                        _ => continue,
+                    }
+                }
+                return false;
+            } else {
+                for node in egraph[eclass].nodes.iter() {
+                    match node {
+                        Mio::RelAlu(children) | Mio::ArithAlu(children) => {
+                            return check_depth(children);
+                        }
+                        _ => continue,
+                    }
+                }
+                return false;
+            }
+        } else {
+            for node in egraph[eclass].nodes.iter() {
+                match node {
+                    Mio::RelAlu(children) | Mio::SAlu(children) | Mio::ArithAlu(children) => {
+                        return check_depth(children);
+                    }
+                    _ => continue,
+                }
+            }
+            return false;
+        }
     }
 }
 
