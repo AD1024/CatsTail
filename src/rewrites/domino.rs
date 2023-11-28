@@ -515,35 +515,42 @@ mod test {
             table_transformations::{
                 lift_ite_compare, lift_ite_cond, lift_nested_ite_cond, seq_elim,
             },
+            RW,
         },
         utils::testing::run_n_times,
     };
 
+    use super::stateless::arith_to_alu;
+
     #[allow(dead_code)]
-    fn test_domino_mapping(prog: Vec<Table>, filename: &'static str) -> Duration {
+    fn test_domino_mapping(
+        prog: Vec<Table>,
+        filename: &'static str,
+        rewrites: &Vec<RW>,
+    ) -> Duration {
         let start_time = std::time::Instant::now();
         let (egraph, root) = tables_to_egraph(prog);
-        let rewrites = seq_elim()
-            .into_iter()
-            .chain(super::stateless::arith_to_alu())
-            .chain(elaborator_conversion())
-            .chain(if_else_raw())
-            .chain(pred_raw())
-            .chain(bool_alu_rewrites())
-            .chain(nested_ifs())
-            .chain(rel_comp_rewrites())
-            .chain(alg_simpl())
-            .chain(lift_ite_compare())
-            .chain(lift_ite_cond())
-            .chain(lift_nested_ite_cond())
-            .chain(predicate_rewrites())
-            .chain(stateful_ite_simpl())
-            .collect::<Vec<_>>();
+        // let rewrites = seq_elim()
+        //     .into_iter()
+        //     .chain(super::stateless::arith_to_alu())
+        //     .chain(elaborator_conversion())
+        //     .chain(if_else_raw())
+        //     .chain(pred_raw())
+        //     .chain(bool_alu_rewrites())
+        //     .chain(nested_ifs())
+        //     .chain(rel_comp_rewrites())
+        //     .chain(alg_simpl())
+        //     .chain(lift_ite_compare())
+        //     .chain(lift_ite_cond())
+        //     .chain(lift_nested_ite_cond())
+        //     .chain(predicate_rewrites())
+        //     .chain(stateful_ite_simpl())
+        //     .collect::<Vec<_>>();
         let runner = Runner::default()
             .with_egraph(egraph)
             .with_node_limit(10_000)
             .with_time_limit(Duration::from_secs(5));
-        let runner = runner.run(rewrites.iter());
+        let runner = runner.run(rewrites);
         let greedy_ext = GreedyExtractor::new(&runner.egraph, 1);
         let extractor = Extractor::new(&runner.egraph, greedy_ext);
         let (best_cost, best) = extractor.find_best(root);
@@ -559,46 +566,86 @@ mod test {
         end_time - start_time
     }
 
+    fn prelude() -> Vec<RW> {
+        seq_elim()
+            .into_iter()
+            .chain(arith_to_alu())
+            .chain(elaborator_conversion())
+            .chain(bool_alu_rewrites())
+            .chain(stateful_ite_simpl())
+            .chain(rel_comp_rewrites())
+            .chain(alg_simpl())
+            .chain(predicate_rewrites())
+            .collect()
+    }
+
     #[test]
     fn test_stateful_fw() {
-        let run_fn =
-            || test_domino_mapping(crate::p4::example_progs::stateful_fw(), "stateful_fw.pdf");
-        let avg_time = run_n_times(10, run_fn, "domino_stateful_fw.json");
+        let rw = prelude()
+            .into_iter()
+            .chain(if_else_raw())
+            .chain(lift_ite_compare())
+            .chain(lift_ite_cond())
+            .chain(nested_ifs())
+            .collect();
+        let run_fn = || {
+            test_domino_mapping(
+                crate::p4::example_progs::stateful_fw(),
+                "stateful_fw.pdf",
+                &rw,
+            )
+        };
+        let avg_time = run_n_times(1, run_fn, "domino_stateful_fw.json");
         println!("stateful fw avg time: {:?}", avg_time);
     }
 
     #[test]
     fn test_blue_increase() {
+        let rw = prelude()
+            .into_iter()
+            .chain(if_else_raw())
+            .chain(lift_ite_cond())
+            .chain(pred_raw())
+            .collect();
         let run_fn = || {
             test_domino_mapping(
                 crate::p4::example_progs::blue_increase(),
                 "blue_increase.pdf",
+                &rw,
             )
         };
-        let avg_time = run_n_times(10, run_fn, "domino_blue_increase.json");
+        let avg_time = run_n_times(1, run_fn, "domino_blue_increase.json");
         println!("blue increase avg time: {:?}", avg_time);
     }
 
     #[test]
     fn test_domino_rcp() {
-        let run_fn = || test_domino_mapping(crate::p4::example_progs::rcp(), "rcp.pdf");
+        let rw = prelude().into_iter().chain(pred_raw()).collect();
+        let run_fn = || test_domino_mapping(crate::p4::example_progs::rcp(), "rcp.pdf", &rw);
         let avg_time = run_n_times(10, run_fn, "domino_rcp.json");
         println!("RCP avg time: {:?}", avg_time);
     }
 
     #[test]
     fn test_domino_sampling() {
-        let run_fn = || test_domino_mapping(crate::p4::example_progs::sampling(), "rcp.pdf");
+        let rw = prelude().into_iter().chain(if_else_raw()).collect();
+        let run_fn = || test_domino_mapping(crate::p4::example_progs::sampling(), "rcp.pdf", &rw);
         let avg_time = run_n_times(10, run_fn, "domino_sampling.json");
         println!("sampling avg time: {:?}", avg_time);
     }
 
     #[test]
     fn test_domino_marple_flow_new() {
+        let rw = prelude()
+            .into_iter()
+            .chain(if_else_raw())
+            .chain(pred_raw())
+            .collect();
         let run_fn = || {
             test_domino_mapping(
                 crate::p4::example_progs::marple_new_flow(),
                 "marple_new_flow.pdf",
+                &rw,
             )
         };
         let avg_time = run_n_times(10, run_fn, "domino_marple_new_flow.json");
@@ -607,16 +654,36 @@ mod test {
 
     #[test]
     fn test_domino_marple_nmo() {
-        let run_fn =
-            || test_domino_mapping(crate::p4::example_progs::marple_nmo(), "marple_nmo.pdf");
-        let avg_time = run_n_times(10, run_fn, "domino_marple_nmo.json");
+        let rw = prelude()
+            .into_iter()
+            .chain(if_else_raw())
+            .chain(lift_ite_compare())
+            .chain(lift_ite_cond())
+            .chain(nested_ifs())
+            .collect();
+        let run_fn = || {
+            test_domino_mapping(
+                crate::p4::example_progs::marple_nmo(),
+                "marple_nmo.pdf",
+                &rw,
+            )
+        };
+        let avg_time = run_n_times(1, run_fn, "domino_marple_nmo.json");
         println!("marple nmo avg time: {:?}", avg_time);
     }
 
     #[test]
     fn test_domino_flowlet() {
-        let run_fn = || test_domino_mapping(crate::p4::example_progs::flowlet(), "flowlet.pdf");
-        let avg_time = run_n_times(10, run_fn, "domino_flowlet.json");
+        let rw = prelude()
+            .into_iter()
+            .chain(if_else_raw())
+            .chain(lift_ite_compare())
+            .chain(lift_ite_cond())
+            .chain(nested_ifs())
+            .collect();
+        let run_fn =
+            || test_domino_mapping(crate::p4::example_progs::flowlet(), "flowlet.pdf", &rw);
+        let avg_time = run_n_times(1, run_fn, "domino_flowlet.json");
         println!("flowlet avg time: {:?}", avg_time);
     }
 }
