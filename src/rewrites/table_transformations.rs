@@ -168,19 +168,13 @@ fn compute_lift_cond(
                     // comsider ?c to be (?op lhs rhs)
                     // we can lift lhs or rhs to some new phv field
                     // if it only involves with 1 stateful read
-                    if MioAnalysis::stateful_read_count(egraph, lhs)
-                        == 1 || MioAnalysis::min_depth(egraph, lhs) > 0
+                    if (MioAnalysis::stateful_read_count(egraph, lhs)
+                        == 1 || MioAnalysis::min_depth(egraph, lhs) > 0)
+                        && MioAnalysis::stateful_reads(egraph, lhs)
+                        .intersection(&compute_rd)
+                        .count()
+                        == 0
                     {
-                        // if the computation depends on some global variables
-                        // that is also required by lhs or rhs, then we cannot
-                        // lift it (read then write to the same global variable has to be atomic)
-                        if MioAnalysis::stateful_reads(egraph, lhs)
-                            .intersection(&compute_rd)
-                            .count()
-                            > 0
-                        {
-                            continue;
-                        }
                         let new_phv_field = egraph.analysis.new_var(
                             MioAnalysis::get_type(egraph, lhs),
                             lhs.to_string(),
@@ -194,7 +188,7 @@ fn compute_lift_cond(
                         )
                     } else if MioAnalysis::stateful_read_count(
                         egraph, rhs,
-                    ) == 1 || MioAnalysis::min_depth(egraph, lhs) > 0
+                    ) == 1 || MioAnalysis::min_depth(egraph, rhs) > 0
                     {
                         if MioAnalysis::stateful_reads(egraph, rhs)
                             .intersection(&compute_rd)
@@ -276,19 +270,22 @@ pub fn lift_ite_compare() -> Vec<RW> {
                     {
                         continue;
                     }
-                    if MioAnalysis::elaborations(egraph, *elab)
-                        .union(&MioAnalysis::stateful_reads(egraph, *elab))
-                        .count()
-                        <= 1
-                    {
-                        continue;
-                    }
+                    // if MioAnalysis::elaborations(egraph, *elab)
+                    //     .union(&MioAnalysis::stateful_reads(egraph, *elab))
+                    //     .count()
+                    //     <= 1
+                    // {
+                    //     continue;
+                    // }
                     for node in egraph[comp_id].nodes.clone() {
                         match node {
                             Mio::Ite([c, ib, rb]) => {
                                 if let Some((var_name, new_comp, compute_phv)) =
                                     compute_lift_cond(egraph, c, ib, rb)
                                 {
+                                    // println!("new_comp: {}", MioAnalysis::extract_smallest_expr(egraph, new_comp).pretty(80));
+                                    // println!("compute_phv: {}", MioAnalysis::extract_smallest_expr(egraph, compute_phv).pretty(80));
+                                    // println!("Var: {}", var_name);
                                     let new_ite = egraph.add(Mio::Ite([new_comp, ib, rb]));
                                     if !splitted.contains(&compute_phv) {
                                         subsplit.push((var_name, compute_phv));
@@ -330,6 +327,7 @@ pub fn lift_ite_compare() -> Vec<RW> {
                                     } else {
                                         subremain.push((evar.clone(), comp_id));
                                     }
+                                    break;
                                 }
                                 _ => (),
                             }
@@ -346,6 +344,8 @@ pub fn lift_ite_compare() -> Vec<RW> {
                     split.push(subsplit);
                 }
             }
+            // println!("remain: {:?}", remain);
+            // println!("split: {:?}", split);
             if remain.len() == 0 || split.len() == 0 {
                 return vec![];
             }
@@ -370,6 +370,7 @@ pub fn lift_ite_compare() -> Vec<RW> {
             let next_table_id =
                 MioAnalysis::build_table(egraph, next_table, kid, remain_comps, remain_elabs);
             let seq_id = egraph.add(Mio::Seq([prev_table_id, next_table_id]));
+            // println!("Splitted: {}", MioAnalysis::extract_smallest_expr(egraph, seq_id).pretty(80));
             egraph.union(eclass, seq_id);
             vec![seq_id, eclass]
         }
@@ -519,6 +520,8 @@ pub fn lift_nested_ite_cond() -> Vec<RW> {
                     split.push(subsplit);
                 }
             }
+            println!("remain: {:?}", remain);
+            println!("split: {:?}", split);
             if remain.len() == 0 || split.len() == 0 {
                 return vec![];
             }
@@ -706,8 +709,6 @@ pub fn lift_ite_cond() -> Vec<RW> {
                     split.push(subsplit);
                 }
             }
-            // println!("lift ite cond remain: {:?}", remain);
-            // println!("lift ite cond split: {:?}", split);
             if remain.len() == 0 || split.len() == 0 {
                 return vec![];
             }

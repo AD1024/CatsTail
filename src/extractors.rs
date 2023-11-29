@@ -90,6 +90,11 @@ impl<'a> CostFunction<Mio> for GreedyExtractor<'a> {
                         match node {
                             Mio::SAlu(_) => {
                                 is_mapped = true;
+                                break;
+                            }
+                            Mio::Constant(_) | Mio::Symbol(_) => {
+                                is_mapped = true;
+                                break;
                             }
                             _ => {}
                         }

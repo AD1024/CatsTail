@@ -86,6 +86,7 @@ pub fn rel_comp_rewrites() -> Vec<RW> {
         rewrite!("not-lt-ge"; "(lnot (< ?x ?y))" => "(>= ?x ?y)"),
         rewrite!("gt-lt"; "(> ?x ?y)" => "(< ?y ?x)"),
         rewrite!("lt-gt"; "(< ?x ?y)" => "(> ?y ?x)"),
+        rewrite!("lt-to-zero-cmp"; "(< ?x ?y)" => "(< 0 (- ?x ?y))"),
         rewrite!("lt-comp-lt-0"; "(< ?x ?y)" => "(< (- ?x ?y) 0)"),
         rewrite!("gt-comp-gt-0"; "(> ?x ?y)" => "(< 0 (- ?x ?y))"),
         rewrite!("lt-comp-sub"; "(< (- ?x ?y) ?z)" => "(> ?y (- ?x ?z))"),

@@ -5,6 +5,14 @@ use crate::language::{
     utils::{get_dependency, Dependency},
 };
 
+use self::{
+    alg_simp::{alg_simpl, predicate_rewrites, rel_comp_rewrites},
+    table_transformations::{
+        comm_independent_tables, lift_ite_compare, lift_ite_cond, lift_nested_ite_cond,
+        parallelize_independent_tables, seq_elim,
+    },
+};
+
 pub mod alg_simp;
 pub mod domino;
 pub mod table_transformations;
@@ -205,6 +213,9 @@ impl Applier<Mio, MioAnalysis> for ElaboratorConversion {
         let expr_id = subst[self.expr];
         let elaborations = MioAnalysis::elaborations(egraph, eclass).clone();
         let (op, args) = MioAnalysis::decompose_alu_ops(egraph, expr_id).unwrap();
+        if op == "alu-const" || op == "alu-global" || op == "alu-local" {
+            return vec![];
+        }
         if MioAnalysis::has_stateful_elaboration(egraph, eclass)
             || MioAnalysis::has_stateful_reads(egraph, eclass)
         {
@@ -331,22 +342,16 @@ pub fn lift_stateless() -> Vec<RW> {
                             // we will need to check whether this elaboration has a match in the form of
                             // (?op ?x ?y) where ?x or ?y is a global variable
                             for op in ["+", "-"] {
-                                let pattern_l =
-                                    format!("(E ?t ?v ({} (arith-alu alu-global ?x) ?y))", op)
-                                        .parse::<Pattern<Mio>>()
-                                        .unwrap();
-                                let pattern_r =
-                                    format!("(E ?t ?v ({} ?y (arith-alu alu-global ?x)))", op)
-                                        .parse::<Pattern<Mio>>()
-                                        .unwrap();
+                                let pattern_l = format!("(E ?t ?v ({} ?x ?y))", op)
+                                    .parse::<Pattern<Mio>>()
+                                    .unwrap();
                                 egraph.rebuild();
                                 let search_left =
                                     pattern_l.search_eclass(egraph, action_elaborations);
-                                let search_right =
-                                    pattern_r.search_eclass(egraph, action_elaborations);
-                                let hit_left = search_left.is_some();
-                                if let Some(matches) = search_left.or(search_right) {
-                                    // split ?y to some previous stage and replace with a new PHV field
+                                if let Some(matches) = search_left {
+                                    // split ?x/?y to some previous stage and replace with a new PHV field
+                                    // if ?y / ?x is a global variable
+                                    todo!("Change accordingly!");
                                     let new_subst = &matches.substs[0];
                                     let pattern_var = "?y".parse().unwrap();
                                     if is_n_depth_mapped(pattern_var, 1, Some(false))(
@@ -381,21 +386,11 @@ pub fn lift_stateless() -> Vec<RW> {
                                         new_subst["?x".parse().unwrap()],
                                     ]));
                                     let binding_id = egraph.add(Mio::Symbol(binding.clone()));
-                                    let remain_id = if hit_left {
-                                        // Wrap to be (op (arith-alu alu-global ?x) ?binding)
-                                        MioAnalysis::add_expr(
-                                            egraph,
-                                            op,
-                                            vec![global_var_id, binding_id],
-                                        )
-                                    } else {
-                                        // Wrap to be (op ?binding (arith-alu alu-global ?x))
-                                        MioAnalysis::add_expr(
-                                            egraph,
-                                            op,
-                                            vec![binding_id, global_var_id],
-                                        )
-                                    };
+                                    let remain_id = MioAnalysis::add_expr(
+                                        egraph,
+                                        op,
+                                        vec![global_var_id, binding_id],
+                                    );
                                     remain.push((remain_id, elaborations.clone()));
                                     lifted.push((to_lift, binding));
                                 } else {
@@ -626,4 +621,24 @@ pub fn lift_stateless() -> Vec<RW> {
         //     }
         // }),
     ]
+}
+
+pub fn rules_by_name(name: &str) -> Vec<RW> {
+    match name {
+        "alg-simp" => alg_simpl(),
+        "seq-norm" => seq_elim(),
+        "predicate-rw" => predicate_rewrites(),
+        "lift-ite-cond" => lift_ite_cond(),
+        "elaborator-conversion" => elaborator_conversion(),
+        "lift-ite-cmp" => lift_ite_compare(),
+        "lift-nested-ite-cond" => lift_nested_ite_cond(),
+        "tofino-prelude" => tofino::rw_prelude(),
+        "domino-prelude" => domino::rw_prelude(),
+        "domino-full" => domino::full_rewrites(),
+        "domino-salu-simpl" => domino::stateful::stateful_ite_simpl(),
+        "parallel-table" => parallelize_independent_tables(),
+        "comm-table" => comm_independent_tables(),
+        "cmp_rewrites" => rel_comp_rewrites(),
+        _ => panic!("No such rule: {}", name),
+    }
 }

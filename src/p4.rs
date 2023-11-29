@@ -537,4 +537,36 @@ pub mod example_progs {
         table2.add_action("a2".into(), a2);
         return vec![table1, table2];
     }
+
+    #[allow(dead_code)]
+    pub fn learn_filter() -> Vec<Table> {
+        let set_pkt = block!(
+            assign!("first_filter_tmp" => var!("global.first_filter")),
+            assign!("second_filter_tmp" => var!("global.second_filter")),
+            assign!("third_filter_tmp" => var!("global.third_filter")),
+            ite!(
+                and!(
+                    and!(
+                        not!(eq!(var!("first_filter_tmp"), Expr::Int(0))),
+                        not!(eq!(var!("second_filter_tmp"), Expr::Int(0)))
+                    ),
+                    not!(eq!(var!("third_filter_tmp"), Expr::Int(0)))
+                ),
+                assign!("meta.member" => Expr::Int(1)),
+                assign!("meta.member" => Expr::Int(0))
+            ),
+            assign!("first_filter_tmp" => Expr::Int(1)),
+            assign!("second_filter_tmp" => Expr::Int(1)),
+            assign!("third_filter_tmp" => Expr::Int(1)),
+            assign!("global.first_filter" => var!("first_filter_tmp")),
+            assign!("global.second_filter" => var!("second_filter_tmp")),
+            assign!("global.third_filter" => var!("third_filter_tmp"))
+        );
+        let mut table = Table::new(
+            "learn_filter_table".to_string(),
+            vec!["meta.learn_filter_key".to_string()],
+        );
+        table.add_action("set_pkt".into(), set_pkt);
+        return vec![table];
+    }
 }

@@ -715,6 +715,16 @@ pub mod ir {
                         let op = Self::get_alu_op(egraph, ops[0])?;
                         return Ok((op, ops[1..].to_vec()));
                     }
+                    Mio::Constant(_) => {
+                        return Ok(("alu-const".parse().unwrap(), vec![id]));
+                    }
+                    Mio::Symbol(sym) => {
+                        if sym.starts_with("global.") {
+                            return Ok(("alu-global".parse().unwrap(), vec![id]));
+                        } else {
+                            return Ok(("alu-local".parse().unwrap(), vec![id]));
+                        }
+                    }
                     _ => (),
                 }
             }
@@ -825,13 +835,13 @@ pub mod ir {
             }
         }
 
-        pub fn get_symbol(egraph: &egg::EGraph<Mio, MioAnalysis>, id: Id) -> String {
+        pub fn get_symbol(egraph: &egg::EGraph<Mio, MioAnalysis>, id: Id) -> Option<String> {
             for node in &egraph[id].nodes {
                 if let Mio::Symbol(sym) = node {
-                    return sym.clone();
+                    return Some(sym.clone());
                 }
             }
-            panic!("No symbol in {:?}", egraph[id].nodes);
+            return None;
         }
 
         pub fn build_table(
@@ -930,15 +940,15 @@ pub mod ir {
         fn modify(egraph: &mut egg::EGraph<Mio, Self>, id: Id) {
             // when there are constants, we can add a new node to the e-class
             // with the constant value
-            if let Mio::Symbol(sym) = &egraph[id].nodes[0] {
-                let alu_symbol = if sym.starts_with("global.") {
-                    egraph.add(Mio::ArithAluOps(ArithAluOps::GlobalSymbol))
-                } else {
-                    egraph.add(Mio::ArithAluOps(ArithAluOps::LocalSymbol))
-                };
-                let sym_node = egraph.add(Mio::ArithAlu(vec![alu_symbol, id]));
-                egraph.union(id, sym_node);
-            }
+            // if let Mio::Symbol(sym) = &egraph[id].nodes[0] {
+            //     let alu_symbol = if sym.starts_with("global.") {
+            //         egraph.add(Mio::ArithAluOps(ArithAluOps::GlobalSymbol))
+            //     } else {
+            //         egraph.add(Mio::ArithAluOps(ArithAluOps::LocalSymbol))
+            //     };
+            //     let sym_node = egraph.add(Mio::ArithAlu(vec![alu_symbol, id]));
+            //     egraph.union(id, sym_node);
+            // }
             if let MioAnalysisData::Action(ActionAnalysis {
                 constant: Some(constant),
                 checked_type,
@@ -947,10 +957,10 @@ pub mod ir {
             }) = egraph[id].data.clone()
             {
                 let new_id = egraph.add(Mio::Constant(constant.clone()));
-                let const_op = egraph.add(Mio::ArithAluOps(ArithAluOps::Const));
-                let alu_const = egraph.add(Mio::ArithAlu(vec![const_op, new_id]));
+                // let const_op = egraph.add(Mio::ArithAluOps(ArithAluOps::Const));
+                // let alu_const = egraph.add(Mio::ArithAlu(vec![const_op, new_id]));
                 egraph.union(id, new_id);
-                egraph.union(id, alu_const);
+                // egraph.union(id, alu_const);
                 let rt = egraph.find(id);
                 egraph[rt].data = MioAnalysis::new_action_data(
                     HashSet::new(),
@@ -1021,7 +1031,7 @@ pub mod ir {
                         MioAnalysis::read_set(egraph, *e).clone(),
                         MioAnalysis::write_set(egraph, *e).clone(),
                         MioAnalysis::get_type(egraph, *e),
-                        MioAnalysis::get_constant(egraph, *e),
+                        None,
                         MioAnalysis::read_set(egraph, *v).clone(),
                         MioAnalysis::min_depth(egraph, *e),
                     );
@@ -1160,13 +1170,19 @@ pub mod ir {
                             }
                         }
                     }
+                    let is_leaf = match &egraph[actions[0]].nodes[0] {
+                        Mio::ArithAluOps(ArithAluOps::Const)
+                        | Mio::ArithAluOps(ArithAluOps::LocalSymbol)
+                        | Mio::ArithAluOps(ArithAluOps::GlobalSymbol) => true,
+                        _ => false,
+                    };
                     MioAnalysis::new_action_data(
                         reads,
                         writes,
                         MioType::Unknown,
                         None,
                         elaborations,
-                        depth + 1,
+                        if is_leaf { 0 } else { depth + 1 },
                     )
                 }
                 Mio::GIte(params) => {

@@ -2,7 +2,17 @@ use egg::{Id, Subst};
 
 use crate::language::ir::Mio;
 
-use super::{is_mapped, RW};
+use self::{
+    stateful::conditional_assignments,
+    stateless::{arith_to_alu, cmp_to_rel},
+};
+
+use super::{
+    alg_simp::rel_comp_rewrites,
+    elaborator_conversion, is_mapped,
+    table_transformations::{lift_ite_compare, seq_elim},
+    RW,
+};
 
 pub mod stateless {
     use egg::rewrite;
@@ -131,6 +141,18 @@ pub mod stateful {
             if is_n_depth_mapped("?rhs".parse().unwrap(), 1, Some(false))
         )]
     }
+}
+
+pub fn rw_prelude() -> Vec<RW> {
+    seq_elim()
+        .into_iter()
+        .chain(arith_to_alu())
+        .chain(conditional_assignments())
+        .chain(elaborator_conversion())
+        .chain(cmp_to_rel())
+        .chain(rel_comp_rewrites())
+        .chain(lift_ite_compare())
+        .collect::<Vec<_>>()
 }
 
 mod test {

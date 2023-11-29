@@ -1,3 +1,15 @@
+use self::{
+    stateful::{bool_alu_rewrites, if_else_raw, nested_ifs, pred_raw, stateful_ite_simpl},
+    stateless::arith_to_alu,
+};
+
+use super::{
+    alg_simp::{alg_simpl, predicate_rewrites, rel_comp_rewrites},
+    elaborator_conversion,
+    table_transformations::{lift_ite_compare, lift_ite_cond, lift_nested_ite_cond, seq_elim},
+    RW,
+};
+
 pub mod stateless {
 
     use egg::{rewrite, EGraph, Id, Pattern, Searcher, Subst, Var};
@@ -147,9 +159,11 @@ pub mod stateful {
             if MioAnalysis::get_constant(egraph, vid).is_some() {
                 return true;
             }
-            let pattern = "(arith-alu alu-global ?x)".parse::<Pattern<Mio>>().unwrap();
-            egraph.rebuild();
-            return pattern.search_eclass(egraph, vid).is_some();
+            if let Some(sym) = MioAnalysis::get_symbol(egraph, vid) {
+                return sym.starts_with("global.");
+            } else {
+                return false;
+            }
         }
     }
 
@@ -160,16 +174,14 @@ pub mod stateful {
         move |egraph, _, subst| {
             let vid1 = subst[v1];
             let vid2 = subst[v2];
-            let pattern = "(arith-alu alu-global ?x)".parse::<Pattern<Mio>>().unwrap();
-            egraph.rebuild();
-            if let Some(m1) = pattern.search_eclass(egraph, vid1) {
-                if let Some(m2) = pattern.search_eclass(egraph, vid2) {
-                    let var_x = "?x".parse().unwrap();
-                    return m1.substs[0][var_x] == m2.substs[0][var_x];
-                }
+            if let (Some(v1_sym), Some(v2_sym)) = (
+                MioAnalysis::get_symbol(egraph, vid1),
+                MioAnalysis::get_symbol(egraph, vid2),
+            ) {
+                return v1_sym == v2_sym;
+            } else {
+                return true;
             }
-            // either v1 or v2 is not a global variable
-            return true;
         }
     }
 
@@ -215,10 +227,7 @@ pub mod stateful {
                 let evar = if elaborations.len() == 0 {
                     "tmp".to_string()
                 } else {
-                    format!(
-                        "(arith-alu alu-global {})",
-                        elaborations.iter().next().unwrap().clone()
-                    )
+                    elaborations.iter().next().unwrap().clone()
                 };
                 let pattern = format!(
                     "(E ?t ?v (stateful-alu alu-ite {}
@@ -308,14 +317,7 @@ pub mod stateful {
                 let evar = if elaborations.len() == 0 {
                     "tmp".to_string()
                 } else {
-                    if MioAnalysis::has_stateful_elaboration(egraph, eclass) {
-                        format!(
-                            "(arith-alu alu-global {})",
-                            elaborations.iter().next().unwrap().clone()
-                        )
-                    } else {
-                        format!("{}", elaborations.iter().next().unwrap().clone())
-                    }
+                    format!("{}", elaborations.iter().next().unwrap().clone())
                 };
                 let pattern = format!(
                     "(E ?t ?v (stateful-alu alu-ite {}
@@ -391,12 +393,12 @@ pub mod stateful {
                     elaborations.iter().next().unwrap().clone()
                 };
                 let pattern = format!(
-                    "(E ?t ?v (stateful-alu alu-ite (arith-alu alu-global {})
+                    "(E ?t ?v (stateful-alu alu-ite {}
                         (rel-alu {} {} {})
                         (arith-alu alu-add {} {})
-                        (arith-alu alu-global {})
+                        ?g
                     ))",
-                    evar, self.op, self.r, self.rhs, self.r1, self.x, self.g
+                    evar, self.op, self.r, self.rhs, self.r1, self.x
                 );
                 return pattern.parse::<Pattern<Mio>>().unwrap().apply_one(
                     egraph,
@@ -407,12 +409,11 @@ pub mod stateful {
                 );
             }
         }
-        vec![
-            rewrite!("domino-stateful-pred-raw";
+        vec![rewrite!("domino-stateful-pred-raw";
             "(E ?t ?v (ite
                     (rel-alu ?op ?r ?rhs)
                     (+ ?r1 ?x)
-                    (arith-alu alu-global ?g)
+                    ?g
                 ))" => { PredRawApplier {
                 op: "?op".parse().unwrap(),
                 r: "?r".parse().unwrap(),
@@ -424,27 +425,10 @@ pub mod stateful {
             if check_relops("?op".parse().unwrap(), vec!["alu-eq", "alu-neq", "alu-gt", "alu-lt"])
             if global_or_0("?r".parse().unwrap())
             if global_or_0("?r1".parse().unwrap())
-            if same_if_is_var("?r".parse().unwrap(), "?r1".parse().unwrap())
-            if constains_leaf("?x".parse().unwrap())),
-            rewrite!("domino-stateful-pred-raw-stateful";
-            "(ite
-                    (rel-alu ?op ?r ?rhs)
-                    (stateful-alu alu-add ?dst ?r1 ?x)
-                    (arith-alu alu-global ?g)
-                )" => { PredRawApplier {
-                op: "?op".parse().unwrap(),
-                r: "?r".parse().unwrap(),
-                rhs: "?rhs".parse().unwrap(),
-                r1: "?r1".parse().unwrap(),
-                x: "?x".parse().unwrap(),
-                g: "?g".parse().unwrap(),
-            } }
-            if check_relops("?op".parse().unwrap(), vec!["alu-eq", "alu-neq", "alu-gt", "alu-lt"])
-            if global_or_0("?r".parse().unwrap())
-            if global_or_0("?r1".parse().unwrap())
-            // if same_if_is_var("?r".parse().unwrap(), "?r1".parse().unwrap())
-            if constains_leaf("?x".parse().unwrap())),
-        ]
+            if global_or_0("?g".parse().unwrap())
+            if same_if_is_var("?v".parse().unwrap(), "?r".parse().unwrap())
+            if same_if_is_var("?v".parse().unwrap(), "?r1".parse().unwrap())
+            if constains_leaf("?x".parse().unwrap()))]
     }
 
     pub fn stateful_ite_simpl() -> Vec<RW> {
@@ -497,6 +481,38 @@ pub mod stateful {
     }
 }
 
+pub fn rw_prelude() -> Vec<RW> {
+    seq_elim()
+        .into_iter()
+        .chain(arith_to_alu())
+        .chain(elaborator_conversion())
+        .chain(bool_alu_rewrites())
+        .chain(stateful_ite_simpl())
+        .chain(rel_comp_rewrites())
+        .chain(alg_simpl())
+        .chain(predicate_rewrites())
+        .collect()
+}
+
+pub fn full_rewrites() -> Vec<RW> {
+    seq_elim()
+        .into_iter()
+        .chain(arith_to_alu())
+        .chain(elaborator_conversion())
+        .chain(if_else_raw())
+        .chain(pred_raw())
+        .chain(bool_alu_rewrites())
+        .chain(nested_ifs())
+        .chain(rel_comp_rewrites())
+        .chain(alg_simpl())
+        .chain(lift_ite_compare())
+        .chain(lift_ite_cond())
+        .chain(lift_nested_ite_cond())
+        .chain(predicate_rewrites())
+        .chain(stateful_ite_simpl())
+        .collect::<Vec<_>>()
+}
+
 mod test {
     use std::time::Duration;
 
@@ -504,7 +520,7 @@ mod test {
 
     use crate::{
         extractors::GreedyExtractor,
-        language::transforms::tables_to_egraph,
+        language::{ir::MioAnalysis, transforms::tables_to_egraph},
         p4::p4ir::Table,
         rewrites::{
             alg_simp::{alg_simpl, predicate_rewrites, rel_comp_rewrites},
@@ -520,7 +536,7 @@ mod test {
         utils::testing::run_n_times,
     };
 
-    use super::stateless::arith_to_alu;
+    use super::{rw_prelude as prelude, stateless::arith_to_alu};
 
     #[allow(dead_code)]
     fn test_domino_mapping(
@@ -530,22 +546,6 @@ mod test {
     ) -> Duration {
         let start_time = std::time::Instant::now();
         let (egraph, root) = tables_to_egraph(prog);
-        // let rewrites = seq_elim()
-        //     .into_iter()
-        //     .chain(super::stateless::arith_to_alu())
-        //     .chain(elaborator_conversion())
-        //     .chain(if_else_raw())
-        //     .chain(pred_raw())
-        //     .chain(bool_alu_rewrites())
-        //     .chain(nested_ifs())
-        //     .chain(rel_comp_rewrites())
-        //     .chain(alg_simpl())
-        //     .chain(lift_ite_compare())
-        //     .chain(lift_ite_cond())
-        //     .chain(lift_nested_ite_cond())
-        //     .chain(predicate_rewrites())
-        //     .chain(stateful_ite_simpl())
-        //     .collect::<Vec<_>>();
         let runner = Runner::default()
             .with_egraph(egraph)
             .with_node_limit(10_000)
@@ -566,19 +566,6 @@ mod test {
         end_time - start_time
     }
 
-    fn prelude() -> Vec<RW> {
-        seq_elim()
-            .into_iter()
-            .chain(arith_to_alu())
-            .chain(elaborator_conversion())
-            .chain(bool_alu_rewrites())
-            .chain(stateful_ite_simpl())
-            .chain(rel_comp_rewrites())
-            .chain(alg_simpl())
-            .chain(predicate_rewrites())
-            .collect()
-    }
-
     #[test]
     fn test_stateful_fw() {
         let rw = prelude()
@@ -595,7 +582,7 @@ mod test {
                 &rw,
             )
         };
-        let avg_time = run_n_times(10, run_fn, "domino_stateful_fw.json");
+        let avg_time = run_n_times(1, run_fn, "domino_stateful_fw.json");
         println!("stateful fw avg time: {:?}", avg_time);
     }
 
@@ -615,7 +602,11 @@ mod test {
 
     #[test]
     fn test_domino_rcp() {
-        let rw = prelude().into_iter().chain(pred_raw()).collect();
+        let rw = prelude()
+            .into_iter()
+            .chain(pred_raw())
+            .chain(lift_ite_compare())
+            .collect();
         let run_fn = || test_domino_mapping(crate::p4::example_progs::rcp(), "rcp.pdf", &rw);
         let avg_time = run_n_times(10, run_fn, "domino_rcp.json");
         println!("RCP avg time: {:?}", avg_time);
