@@ -76,7 +76,7 @@ pub mod stateful {
     use egg::{rewrite, Applier, EGraph, Id, Pattern, Searcher, Subst, Var};
 
     use crate::{
-        language::ir::{Mio, MioAnalysis},
+        language::ir::{Constant, Mio, MioAnalysis},
         rewrites::{constains_leaf, is_n_depth_mapped, RW},
     };
 
@@ -156,8 +156,8 @@ pub mod stateful {
     pub fn global_or_0(v: Var) -> impl Fn(&mut EGraph<Mio, MioAnalysis>, Id, &Subst) -> bool {
         move |egraph, _, subst| {
             let vid = subst[v];
-            if MioAnalysis::get_constant(egraph, vid).is_some() {
-                return true;
+            if let Some(c) = MioAnalysis::get_constant(egraph, vid) {
+                return c == Constant::Int(0);
             }
             if let Some(sym) = MioAnalysis::get_symbol(egraph, vid) {
                 return sym.starts_with("global.");
@@ -428,6 +428,7 @@ pub mod stateful {
             if global_or_0("?g".parse().unwrap())
             if same_if_is_var("?v".parse().unwrap(), "?r".parse().unwrap())
             if same_if_is_var("?v".parse().unwrap(), "?r1".parse().unwrap())
+            if constains_leaf("?rhs".parse().unwrap())
             if constains_leaf("?x".parse().unwrap()))]
     }
 
