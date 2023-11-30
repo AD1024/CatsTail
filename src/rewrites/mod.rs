@@ -1,7 +1,7 @@
 use egg::{rewrite, Applier, EGraph, Id, Language, Pattern, Rewrite, Searcher, Subst, Var};
 
 use crate::language::{
-    ir::{Constant, Mio, MioAnalysis, MioAnalysisData},
+    ir::{ArithAluOps, Constant, Mio, MioAnalysis, MioAnalysisData},
     utils::{get_dependency, Dependency},
 };
 
@@ -222,10 +222,10 @@ impl Applier<Mio, MioAnalysis> for ElaboratorConversion {
             // map to stateful alu
             let output_var_id =
                 egraph.add(Mio::Symbol(elaborations.iter().next().unwrap().clone()));
-            let op_id = if let Some(arith_op) = MioAnalysis::to_arith_alu_op(&op) {
-                egraph.add(Mio::ArithAluOps(arith_op))
+            let op_id = if let Some(op) = MioAnalysis::to_alu_op(&op) {
+                egraph.add(op)
             } else {
-                egraph.add(Mio::RelAluOps(op.parse().unwrap()))
+                return vec![];
             };
             let alu_id = egraph.add(Mio::SAlu(
                 vec![op_id, output_var_id]

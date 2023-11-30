@@ -569,6 +569,7 @@ pub mod ir {
             elaborations: HashSet<String>,
             min_depth: usize,
         ) -> MioAnalysisData {
+            assert!(elaborations.len() <= 1);
             MioAnalysisData::Action(ActionAnalysis {
                 reads,
                 writes,
@@ -677,6 +678,23 @@ pub mod ir {
 
         pub fn to_rel_alu_op(op_name: &String) -> Option<RelAluOps> {
             op_name.parse::<RelAluOps>().ok()
+        }
+
+        pub fn to_bool_alu_op(op_name: &String) -> Option<BoolAluOps> {
+            op_name.parse::<BoolAluOps>().ok()
+        }
+
+        pub fn to_alu_op(op_name: &String) -> Option<Mio> {
+            if let Some(op) = Self::to_arith_alu_op(op_name) {
+                return Some(Mio::ArithAluOps(op));
+            }
+            if let Some(op) = Self::to_rel_alu_op(op_name) {
+                return Some(Mio::RelAluOps(op));
+            }
+            if let Some(op) = Self::to_bool_alu_op(op_name) {
+                return Some(Mio::BoolAluOps(op));
+            }
+            None
         }
 
         pub fn get_alu_op(egraph: &egg::EGraph<Mio, MioAnalysis>, id: Id) -> Result<String, ()> {
@@ -938,17 +956,19 @@ pub mod ir {
         type Data = MioAnalysisData;
 
         fn modify(egraph: &mut egg::EGraph<Mio, Self>, id: Id) {
-            // when there are constants, we can add a new node to the e-class
-            // with the constant value
-            // if let Mio::Symbol(sym) = &egraph[id].nodes[0] {
-            //     let alu_symbol = if sym.starts_with("global.") {
-            //         egraph.add(Mio::ArithAluOps(ArithAluOps::GlobalSymbol))
-            //     } else {
-            //         egraph.add(Mio::ArithAluOps(ArithAluOps::LocalSymbol))
-            //     };
-            //     let sym_node = egraph.add(Mio::ArithAlu(vec![alu_symbol, id]));
-            //     egraph.union(id, sym_node);
-            // }
+            for node in egraph[id].nodes.iter() {
+                match node {
+                    Mio::Constant(_)
+                    | Mio::Elaborate(_)
+                    | Mio::Elaborations(_)
+                    | Mio::GIte(_)
+                    | Mio::Seq(_)
+                    | Mio::Join(_) => {
+                        return;
+                    }
+                    _ => (),
+                }
+            }
             if let MioAnalysisData::Action(ActionAnalysis {
                 constant: Some(constant),
                 checked_type,
@@ -1008,17 +1028,38 @@ pub mod ir {
             {
                 // assert_eq!(u1.elaborations, u2.elaborations);
                 let ty = Self::type_unification(&u1.checked_type, &u2.checked_type);
+                let cons = u1.constant.clone().or(u2.constant.clone());
                 let merged = MioAnalysis::new_action_data(
                     u1.reads.union(&u2.reads).cloned().collect(),
                     u1.writes.union(&u2.writes).cloned().collect(),
                     ty,
-                    u1.constant.clone().or(u2.constant.clone()),
-                    u1.elaborations.union(&u2.elaborations).cloned().collect(),
-                    u1.min_depth.min(u2.min_depth),
+                    cons.clone(),
+                    {
+                        // println!("u1.elaborations: {:?}", u1.elaborations);
+                        // println!("u2.elaborations: {:?}", u2.elaborations);
+                        let merged = u1
+                            .elaborations
+                            .union(&u2.elaborations)
+                            .cloned()
+                            .collect::<HashSet<String>>();
+                        // println!("merged elaborations: {:?}", merged);
+                        assert!(merged.len() <= 1);
+                        merged
+                    },
+                    if cons.is_none() {
+                        u1.min_depth.min(u2.min_depth)
+                    } else {
+                        0
+                    },
                 );
                 let a_merged = merged != *a;
                 let b_merged = merged != b;
+                // println!("old A: {:?}", a);
+                // println!("old B: {:?}", b);
+                // println!("merged: {:?}", merged);
                 *a = merged;
+                // println!("merged A: {:?}", a_merged);
+                // println!("merged B: {:?}", b_merged);
                 return DidMerge(a_merged, b_merged);
             }
             panic!("Cannot merge {:?} and {:?}", a, b);
@@ -1032,7 +1073,7 @@ pub mod ir {
                         MioAnalysis::write_set(egraph, *e).clone(),
                         MioAnalysis::get_type(egraph, *e),
                         None,
-                        MioAnalysis::read_set(egraph, *v).clone(),
+                        HashSet::from([MioAnalysis::get_symbol(egraph, *v).unwrap()]),
                         MioAnalysis::min_depth(egraph, *e),
                     );
                 }
@@ -1152,16 +1193,13 @@ pub mod ir {
                 | Mio::Actions(actions) => {
                     let mut reads = HashSet::new();
                     let mut writes = HashSet::new();
-                    let mut elaborations = HashSet::new();
                     let mut depth = 0;
                     for u in actions.iter().map(|id| &egraph[*id].data) {
                         match u {
                             MioAnalysisData::Action(u) => {
                                 reads = reads.union(&u.reads).cloned().collect();
-                                elaborations =
-                                    elaborations.union(&u.elaborations).cloned().collect();
+                                writes = writes.union(&u.elaborations).cloned().collect();
                                 // Write set of elaborations should be elaborated fields from the underlying elaborators
-                                writes = elaborations.clone();
                                 depth = depth.max(u.min_depth);
                             }
                             MioAnalysisData::Empty => (),
@@ -1181,7 +1219,7 @@ pub mod ir {
                         writes,
                         MioType::Unknown,
                         None,
-                        elaborations,
+                        HashSet::new(),
                         if is_leaf { 0 } else { depth + 1 },
                     )
                 }

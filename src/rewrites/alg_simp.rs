@@ -55,6 +55,7 @@ pub fn predicate_rewrites() -> Vec<RW> {
         rewrite!("and-elim-right"; "(land ?x true)" => "?x"),
         rewrite!("and-comm"; "(land ?x ?y)" => "(land ?y ?x)"),
         rewrite!("and-assoc"; "(land ?x (land ?y ?z))" => "(land (land ?x ?y) ?z)"),
+        rewrite!("and-assoc-rev"; "(land (land ?x ?y) ?z)" => "(land ?x (land ?y ?z))"),
         rewrite!("or-elim-left"; "(lor ?x true)" => "true"),
         rewrite!("or-elim-right"; "(lor ?x false)" => "?x"),
         rewrite!("or-comm"; "(lor ?x ?y)" => "(lor ?y ?x)"),
@@ -90,7 +91,7 @@ pub fn rel_comp_rewrites() -> Vec<RW> {
         rewrite!("lt-comp-lt-0"; "(< ?x ?y)" => "(< (- ?x ?y) 0)"),
         rewrite!("gt-comp-gt-0"; "(> ?x ?y)" => "(< 0 (- ?x ?y))"),
         rewrite!("lt-comp-sub"; "(< (- ?x ?y) ?z)" => "(> ?y (- ?x ?z))"),
-        rewrite!("eq-to-zero-check"; "(= ?x ?y)" => "(!= (- (+ ?x 1) ?y) 0)"
+        rewrite!("eq-to-zero-check"; "(= ?x ?y)" => "(!= 0 (- ?x ?y))"
                 if is_integer("?x".parse().unwrap())
                 if is_integer("?y".parse().unwrap())),
         rewrite!("neq-to-zero-check"; "(!= ?x ?y)" => "(!= (- ?x ?y) 0)"

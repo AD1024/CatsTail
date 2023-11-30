@@ -23,6 +23,10 @@ pub mod stateless {
         // https://github.com/CaT-mindepth/minDepthCompiler/blob/weighted-grammar-parallel-final/src/grammars/stateless_domino/stateless_new.sk
         fn neq_0_check_match(x: Var) -> impl Fn(&mut EGraph<Mio, MioAnalysis>, Id, &Subst) -> bool {
             move |egraph, _, subst| {
+                // println!("neq_0_check_match: {}", MioAnalysis::extract_smallest_expr(egraph, subst[x]));
+                if MioAnalysis::get_symbol(egraph, subst[x]).is_some() {
+                    return true;
+                }
                 let pattern = "(!= ?x 0)";
                 let pattern = pattern.parse::<Pattern<Mio>>().unwrap();
                 egraph.rebuild();
@@ -62,7 +66,7 @@ pub mod stateless {
                 if neq_0_check_match("?x".parse().unwrap())
                 if neq_0_check_match("?y".parse().unwrap())),
             rewrite!("domino-neq-0-and";
-                "(land ?x ?y)" => { AluApplier::new("rel-alu", "alu-or", vec!["?x", "?y"]) }
+                "(land ?x ?y)" => { AluApplier::new("rel-alu", "alu-and", vec!["?x", "?y"]) }
                 if neq_0_check_match("?x".parse().unwrap())
                 if neq_0_check_match("?y".parse().unwrap())),
         ]
@@ -672,5 +676,26 @@ mod test {
             || test_domino_mapping(crate::p4::example_progs::flowlet(), "flowlet.pdf", &rw);
         let avg_time = run_n_times(10, run_fn, "domino_flowlet.json");
         println!("flowlet avg time: {:?}", avg_time);
+    }
+
+    #[test]
+    fn test_domino_learn_filter() {
+        let rw = prelude()
+            .into_iter()
+            .chain(pred_raw())
+            .chain(if_else_raw())
+            .chain(lift_ite_compare())
+            .chain(lift_ite_cond())
+            .chain(nested_ifs())
+            .collect();
+        let run_fn = || {
+            test_domino_mapping(
+                crate::p4::example_progs::learn_filter(),
+                "learn_filter.pdf",
+                &rw,
+            )
+        };
+        let avg_time = run_n_times(1, run_fn, "domino_learn_filter.json");
+        println!("learn filter avg time: {:?}", avg_time);
     }
 }
