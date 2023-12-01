@@ -283,6 +283,7 @@ pub fn lift_ite_compare() -> Vec<RW> {
                                 if let Some((var_name, new_comp, compute_phv)) =
                                     compute_lift_cond(egraph, c, ib, rb)
                                 {
+                                    // println!("Lifted: {}", MioAnalysis::extract_smallest_expr(egraph, c));
                                     // println!("new_comp: {}", MioAnalysis::extract_smallest_expr(egraph, new_comp).pretty(80));
                                     // println!("compute_phv: {}", MioAnalysis::extract_smallest_expr(egraph, compute_phv).pretty(80));
                                     // println!("Var: {}", var_name);
@@ -405,6 +406,7 @@ pub fn lift_nested_ite_cond() -> Vec<RW> {
             let mut split = vec![];
             let mut fixed = HashSet::new();
             let mut expr_map = HashMap::new();
+            let mut splitted = HashSet::new();
             let prev_table = egraph
                 .analysis
                 .new_table_name(MioAnalysis::get_table_name(egraph, eclass));
@@ -426,6 +428,8 @@ pub fn lift_nested_ite_cond() -> Vec<RW> {
                         }
                         match node {
                             Mio::Ite([c, ib, rb]) => {
+                                let mut new_ib = ib;
+                                let mut new_rb = rb;
                                 for ib_node in egraph[ib].nodes.clone() {
                                     match ib_node {
                                         Mio::Ite([ib_c, ib_ib, ib_rb]) => {
@@ -434,15 +438,21 @@ pub fn lift_nested_ite_cond() -> Vec<RW> {
                                             {
                                                 let inner_ite =
                                                     egraph.add(Mio::Ite([new_comp, ib_ib, ib_rb]));
-                                                let new_ite =
-                                                    egraph.add(Mio::Ite([c, inner_ite, rb]));
-                                                subsplit.push((var_name, compute_phv));
-                                                split_reads.extend(MioAnalysis::stateful_reads(
-                                                    egraph,
-                                                    compute_phv,
-                                                ));
-                                                subremain.push((evar.clone(), new_ite));
-                                                fixed.insert(*elab);
+                                                // let new_ite =
+                                                //     egraph.add(Mio::Ite([c, inner_ite, rb]));
+                                                new_ib = inner_ite;
+                                                if !splitted.contains(&compute_phv) {
+                                                    subsplit.push((var_name, compute_phv));
+                                                    split_reads.extend(
+                                                        MioAnalysis::stateful_reads(
+                                                            egraph,
+                                                            compute_phv,
+                                                        ),
+                                                    );
+                                                    splitted.insert(compute_phv);
+                                                }
+                                                // subremain.push((evar.clone(), new_ite));
+                                                // fixed.insert(*elab);
                                                 expr_map.insert(ib_c, new_comp);
                                                 break;
                                             }
@@ -458,21 +468,33 @@ pub fn lift_nested_ite_cond() -> Vec<RW> {
                                             {
                                                 let inner_ite =
                                                     egraph.add(Mio::Ite([new_comp, rb_ib, rb_rb]));
-                                                let new_ite =
-                                                    egraph.add(Mio::Ite([c, ib, inner_ite]));
-                                                subsplit.push((var_name, compute_phv));
-                                                split_reads.extend(MioAnalysis::stateful_reads(
-                                                    egraph,
-                                                    compute_phv,
-                                                ));
-                                                subremain.push((evar.clone(), new_ite));
-                                                fixed.insert(*elab);
+                                                new_rb = inner_ite;
+                                                // let new_ite =
+                                                //     egraph.add(Mio::Ite([c, ib, inner_ite]));
+                                                if !splitted.contains(&compute_phv) {
+                                                    subsplit.push((var_name, compute_phv));
+                                                    split_reads.extend(
+                                                        MioAnalysis::stateful_reads(
+                                                            egraph,
+                                                            compute_phv,
+                                                        ),
+                                                    );
+                                                    splitted.insert(compute_phv);
+                                                }
+                                                // subremain.push((evar.clone(), new_ite));
+                                                // fixed.insert(*elab);
                                                 expr_map.insert(rb_c, new_comp);
-                                                break 'outter_loop;
+                                                break;
                                             }
                                         }
                                         _ => {}
                                     }
+                                }
+                                if new_ib != ib || new_rb != rb {
+                                    let new_ite = egraph.add(Mio::Ite([c, new_ib, new_rb]));
+                                    subremain.push((evar.clone(), new_ite));
+                                    fixed.insert(*elab);
+                                    break 'outter_loop;
                                 }
                             }
                             _ => {}
@@ -520,8 +542,8 @@ pub fn lift_nested_ite_cond() -> Vec<RW> {
                     split.push(subsplit);
                 }
             }
-            println!("remain: {:?}", remain);
-            println!("split: {:?}", split);
+            // println!("remain: {:?}", remain);
+            // println!("split: {:?}", split);
             if remain.len() == 0 || split.len() == 0 {
                 return vec![];
             }

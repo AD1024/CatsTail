@@ -81,7 +81,7 @@ pub mod stateful {
 
     use crate::{
         language::ir::{Constant, Mio, MioAnalysis},
-        rewrites::{constains_leaf, is_n_depth_mapped, RW},
+        rewrites::{constains_leaf, is_n_depth_mapped, none_global, RW},
     };
 
     fn check_relops(
@@ -90,6 +90,7 @@ pub mod stateful {
     ) -> impl Fn(&mut EGraph<Mio, MioAnalysis>, Id, &Subst) -> bool {
         move |egraph, _, subst| {
             let vid = subst[v];
+            assert_eq!(egraph[vid].nodes.len(), 1);
             let operators = operators
                 .iter()
                 .map(|op| Mio::RelAluOps(op.parse().unwrap()))
@@ -161,13 +162,21 @@ pub mod stateful {
         move |egraph, _, subst| {
             let vid = subst[v];
             if let Some(c) = MioAnalysis::get_constant(egraph, vid) {
-                return c == Constant::Int(0);
+                return c == Constant::Int(0) || c == Constant::Bool(false);
             }
             if let Some(sym) = MioAnalysis::get_symbol(egraph, vid) {
                 return sym.starts_with("global.");
             } else {
                 return false;
             }
+        }
+    }
+
+    pub fn non_global(v: Var) -> impl Fn(&mut EGraph<Mio, MioAnalysis>, Id, &Subst) -> bool {
+        move |egraph, _, subst| {
+            let vid = subst[v];
+            return MioAnalysis::stateful_read_count(egraph, vid) == 0
+                && !MioAnalysis::has_stateful_elaboration(egraph, vid);
         }
     }
 
@@ -182,7 +191,11 @@ pub mod stateful {
                 MioAnalysis::get_symbol(egraph, vid1),
                 MioAnalysis::get_symbol(egraph, vid2),
             ) {
-                return v1_sym == v2_sym;
+                if v1_sym.starts_with("global.") && v2_sym.starts_with("global.") {
+                    return v1_sym == v2_sym;
+                } else {
+                    return true;
+                }
             } else {
                 return true;
             }
@@ -267,8 +280,10 @@ pub mod stateful {
                 // if global_or_0("?r".parse().unwrap())
                 // if global_or_0("?z".parse().unwrap())
                 // if global_or_0("?w".parse().unwrap())
-                // if same_if_is_var("?r".parse().unwrap(), "?z".parse().unwrap())
-                // if same_if_is_var("?r".parse().unwrap(), "?w".parse().unwrap())
+                if same_if_is_var("?v".parse().unwrap(), "?r".parse().unwrap())
+                if same_if_is_var("?v".parse().unwrap(), "?z".parse().unwrap())
+                if same_if_is_var("?v".parse().unwrap(), "?w".parse().unwrap())
+                if none_global("?rhs".parse().unwrap())
                 if constains_leaf("?rhs".parse().unwrap())
                 if constains_leaf("?x".parse().unwrap())
                 if constains_leaf("?y".parse().unwrap()))]
@@ -432,6 +447,7 @@ pub mod stateful {
             if global_or_0("?g".parse().unwrap())
             if same_if_is_var("?v".parse().unwrap(), "?r".parse().unwrap())
             if same_if_is_var("?v".parse().unwrap(), "?r1".parse().unwrap())
+            if same_if_is_var("?v".parse().unwrap(), "?g".parse().unwrap())
             if constains_leaf("?rhs".parse().unwrap())
             if constains_leaf("?x".parse().unwrap()))]
     }
@@ -521,16 +537,22 @@ pub fn full_rewrites() -> Vec<RW> {
 mod test {
     use std::time::Duration;
 
-    use egg::{Extractor, Runner};
+    use egg::{Extractor, Runner, Searcher};
 
     use crate::{
         extractors::GreedyExtractor,
-        language::{ir::MioAnalysis, transforms::tables_to_egraph},
+        language::{
+            ir::{Mio, MioAnalysis},
+            transforms::tables_to_egraph,
+        },
         p4::p4ir::Table,
         rewrites::{
             alg_simp::{alg_simpl, predicate_rewrites, rel_comp_rewrites},
-            domino::stateful::{
-                bool_alu_rewrites, if_else_raw, nested_ifs, pred_raw, stateful_ite_simpl,
+            domino::{
+                full_rewrites,
+                stateful::{
+                    bool_alu_rewrites, if_else_raw, nested_ifs, pred_raw, stateful_ite_simpl,
+                },
             },
             elaborator_conversion,
             table_transformations::{
@@ -551,6 +573,7 @@ mod test {
     ) -> Duration {
         let start_time = std::time::Instant::now();
         let (egraph, root) = tables_to_egraph(prog);
+        // println!("Now: {}", MioAnalysis::extract_smallest_expr(&egraph, root).pretty(80));
         let runner = Runner::default()
             .with_egraph(egraph)
             .with_node_limit(10_000)
@@ -560,8 +583,14 @@ mod test {
         let extractor = Extractor::new(&runner.egraph, greedy_ext);
         let (best_cost, best) = extractor.find_best(root);
         let end_time = std::time::Instant::now();
-        // println!("best cost: {}", best_cost);
+        println!("best cost: {}", best_cost);
         println!("best: {}", best.pretty(80));
+        // let mut new_egraph = egg::EGraph::<Mio, MioAnalysis>::new(
+        //     MioAnalysis::default(),
+        // );
+        // let rt = new_egraph.add_expr(&best);
+        // let extractor = Extractor::new(&new_egraph, GreedyExtractor::new(&new_egraph, 1));
+        // let _ = extractor.find_best(rt);
         assert!(
             best_cost < usize::MAX,
             "Cannot map the following program:\n{}",
@@ -580,6 +609,7 @@ mod test {
             .chain(lift_ite_cond())
             .chain(nested_ifs())
             .collect();
+        // let rw = full_rewrites();
         let run_fn = || {
             test_domino_mapping(
                 crate::p4::example_progs::stateful_fw(),
@@ -587,13 +617,19 @@ mod test {
                 &rw,
             )
         };
-        let avg_time = run_n_times(1, run_fn, "domino_stateful_fw.json");
+        let avg_time = run_n_times(10, run_fn, "domino_stateful_fw.json");
         println!("stateful fw avg time: {:?}", avg_time);
     }
 
     #[test]
     fn test_blue_increase() {
-        let rw = prelude().into_iter().chain(if_else_raw()).collect();
+        let rw = prelude()
+            .into_iter()
+            .chain(lift_ite_compare())
+            .chain(pred_raw())
+            .chain(if_else_raw())
+            .collect();
+        // let rw = full_rewrites();
         let run_fn = || {
             test_domino_mapping(
                 crate::p4::example_progs::blue_increase(),
@@ -612,6 +648,7 @@ mod test {
             .chain(pred_raw())
             .chain(lift_ite_compare())
             .collect();
+        // let rw = full_rewrites();
         let run_fn = || test_domino_mapping(crate::p4::example_progs::rcp(), "rcp.pdf", &rw);
         let avg_time = run_n_times(10, run_fn, "domino_rcp.json");
         println!("RCP avg time: {:?}", avg_time);
@@ -620,6 +657,7 @@ mod test {
     #[test]
     fn test_domino_sampling() {
         let rw = prelude().into_iter().chain(if_else_raw()).collect();
+        // let rw = full_rewrites();
         let run_fn = || test_domino_mapping(crate::p4::example_progs::sampling(), "rcp.pdf", &rw);
         let avg_time = run_n_times(10, run_fn, "domino_sampling.json");
         println!("sampling avg time: {:?}", avg_time);
@@ -632,6 +670,7 @@ mod test {
             .chain(if_else_raw())
             .chain(pred_raw())
             .collect();
+        // let rw = full_rewrites();
         let run_fn = || {
             test_domino_mapping(
                 crate::p4::example_progs::marple_new_flow(),
@@ -648,10 +687,12 @@ mod test {
         let rw = prelude()
             .into_iter()
             .chain(if_else_raw())
+            .chain(pred_raw())
             .chain(lift_ite_compare())
-            .chain(lift_ite_cond())
-            .chain(nested_ifs())
+            // .chain(lift_ite_cond())
+            // .chain(nested_ifs())
             .collect();
+        // let rw = full_rewrites();
         let run_fn = || {
             test_domino_mapping(
                 crate::p4::example_progs::marple_nmo(),
@@ -672,6 +713,7 @@ mod test {
             .chain(lift_ite_cond())
             .chain(nested_ifs())
             .collect();
+        // let rw = full_rewrites();
         let run_fn =
             || test_domino_mapping(crate::p4::example_progs::flowlet(), "flowlet.pdf", &rw);
         let avg_time = run_n_times(10, run_fn, "domino_flowlet.json");
@@ -688,6 +730,7 @@ mod test {
             .chain(lift_ite_cond())
             .chain(nested_ifs())
             .collect();
+        // let rw = full_rewrites();
         let run_fn = || {
             test_domino_mapping(
                 crate::p4::example_progs::learn_filter(),
@@ -695,7 +738,7 @@ mod test {
                 &rw,
             )
         };
-        let avg_time = run_n_times(1, run_fn, "domino_learn_filter.json");
+        let avg_time = run_n_times(10, run_fn, "domino_learn_filter.json");
         println!("learn filter avg time: {:?}", avg_time);
     }
 }

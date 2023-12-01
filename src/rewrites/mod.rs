@@ -24,6 +24,9 @@ type EG = EGraph<Mio, MioAnalysis>;
 fn constains_leaf(v: Var) -> impl Fn(&mut EG, Id, &Subst) -> bool {
     move |egraph, _id, subst| {
         let eclass = subst[v];
+        if MioAnalysis::min_depth(egraph, eclass) == 0 {
+            return true;
+        }
         return MioAnalysis::has_leaf(egraph, eclass);
     }
 }

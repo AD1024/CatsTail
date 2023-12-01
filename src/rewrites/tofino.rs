@@ -195,7 +195,7 @@ mod test {
             .with_time_limit(Duration::from_secs(5));
         let runner = runner.run(rewrites.iter());
         // runner.egraph.dot().to_pdf(filename).unwrap();
-        let greedy_ext = GreedyExtractor::new(&runner.egraph, 1);
+        let greedy_ext = GreedyExtractor::new(&runner.egraph, 2);
         let extractor = Extractor::new(&runner.egraph, greedy_ext);
         let (best_cost, best) = extractor.find_best(root);
         let end_time = std::time::Instant::now();

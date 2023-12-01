@@ -16,6 +16,9 @@ pub fn is_integer(v: Var) -> impl Fn(&mut EGraph<Mio, MioAnalysis>, Id, &Subst) 
             _ => (),
         }
         let vid = subst[v];
+        // if MioAnalysis::get_symbol(egraph, vid).is_some() {
+        //     return true;
+        // }
         match &egraph[vid].data {
             MioAnalysisData::Action(u) => match u.checked_type {
                 MioType::Int | MioType::BitInt(_) => true,
@@ -44,7 +47,7 @@ pub fn alg_simpl() -> Vec<RW> {
         rewrite!("add-comm"; "(+ ?x ?y)" => "(+ ?y ?x)"),
         rewrite!("add-assoc"; "(+ ?x (+ ?y ?z))" => "(+ (+ ?x ?y) ?z)"),
         rewrite!("add-identity"; "?x" => "(+ ?x 0)"
-        if is_integer("?x".parse().unwrap())),
+            if is_integer("?x".parse().unwrap())),
     ]
 }
 
@@ -91,6 +94,9 @@ pub fn rel_comp_rewrites() -> Vec<RW> {
         rewrite!("lt-comp-lt-0"; "(< ?x ?y)" => "(< (- ?x ?y) 0)"),
         rewrite!("gt-comp-gt-0"; "(> ?x ?y)" => "(< 0 (- ?x ?y))"),
         rewrite!("lt-comp-sub"; "(< (- ?x ?y) ?z)" => "(> ?y (- ?x ?z))"),
+        rewrite!("lt-to-zero-check"; "(< ?x ?y)" => "(< (- ?x ?y) 0)"
+                if is_integer("?x".parse().unwrap())
+                if is_integer("?y".parse().unwrap())),
         rewrite!("eq-to-zero-check"; "(= ?x ?y)" => "(!= 0 (- ?x ?y))"
                 if is_integer("?x".parse().unwrap())
                 if is_integer("?y".parse().unwrap())),

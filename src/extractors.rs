@@ -51,7 +51,7 @@ impl<'a> CostFunction<Mio> for GreedyExtractor<'a> {
                         }
                     }
                     self.whitelist.remove(enode);
-                    0
+                    1
                 } else {
                     usize::MAX
                 }
@@ -70,8 +70,8 @@ impl<'a> CostFunction<Mio> for GreedyExtractor<'a> {
                 1
             }
             Mio::ArithAluOps(_) | Mio::BoolAluOps(_) | Mio::RelAluOps(_) => 0,
-            Mio::GIte(_) => 1,
-            Mio::Actions(_) => 1,
+            Mio::GIte(_) => 0,
+            Mio::Actions(_) => 0,
             Mio::Elaborations(_) => 0,
             Mio::Elaborate([_, v, e]) => {
                 // if MioAnalysis::stateful_reads(self.egraph, *e)
@@ -102,6 +102,7 @@ impl<'a> CostFunction<Mio> for GreedyExtractor<'a> {
                     if is_mapped {
                         0
                     } else {
+                        // println!("Unmapped stateful update: {} {:?} {:?}", v, self.egraph[*v].nodes, self.egraph[*e].nodes);
                         usize::MAX
                     }
                 } else {
@@ -116,13 +117,13 @@ impl<'a> CostFunction<Mio> for GreedyExtractor<'a> {
                     0
                 }
             }
-            Mio::Keys(_) => 1,
+            Mio::Keys(_) => 0,
             Mio::Seq(_) => 1,
             Mio::Symbol(_) => 0,
             Mio::Constant(_) => 0,
             _ => usize::MAX,
         };
-        let child_cost = enode.fold(0, |max, id| max.max(costs(id)));
+        let child_cost = enode.fold(0, |acc: usize, id| acc.max(costs(id)));
         base.saturating_add(child_cost)
     }
 }
