@@ -21,8 +21,9 @@ Extraction with target constraints.
 ## Synthesis comparison
 ### Synthesis speed
 CatsTail has a much more faster synthesis speed comparing to the state-of-the-art compiler [CaT (Gao et al. 2023)](https://dl.acm.org/doi/abs/10.1145/3582016.3582036).
-![tofino_time](./figures/Tofino_time_comparison.png)
-![domino_time](./figures/domino_time_comparison.png)
+Tofino             |  Domino
+:-------------------------:|:-------------------------:
+![tofino_time](./figures/Tofino_time_comparison.png) | ![domino_time](./figures/domino_time_comparison.png)
 
 ## Stage usage
 Tofino             |  Domino
